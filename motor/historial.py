@@ -117,15 +117,20 @@ def leer_historial_excel(origen) -> ResumenHistorial:
     idx = None
     for i, r in enumerate(filas[:40]):
         vals = [_limpio(v).upper() for v in r]
-        if 'CUENTA' in vals and 'DEBE' in vals and 'HABER' in vals:
+        # Diario Analítico: DEBE/HABER. Diario Analítico DETALLADO: DEBITO S/. / CREDITO S/. (+ R.U.C., DOC., NÚMERO)
+        if 'CUENTA' in vals and any(v.startswith('DEBE') or v.startswith('DEBITO') or v.startswith('DÉBITO') for v in vals) \
+                and any(v.startswith('HABER') or v.startswith('CREDITO') or v.startswith('CRÉDITO') for v in vals):
             idx = i
             ci = {v: j for j, v in enumerate(vals)}
+            ci['DEBE'] = next(j for j, v in enumerate(vals) if v.startswith(('DEBE', 'DEBITO', 'DÉBITO')))
+            ci['HABER'] = next(j for j, v in enumerate(vals) if v.startswith(('HABER', 'CREDITO', 'CRÉDITO')))
             break
 
     if idx is not None:   # ---- Formato 1: Diario Analítico ----
         c_fecha, c_cta, c_desc, c_debe, c_haber = ci['CUENTA'] - 1, ci['CUENTA'], ci.get('DESCRIPCION', ci.get('DESCRIPCIÓN', ci['CUENTA'] + 1)), ci['DEBE'], ci['HABER']
         c_glosa = ci.get('GLOSA')
-        c_ruc = next((ci[k] for k in ci if 'RUC' in k), None)
+        c_ruc = next((ci[k] for k in ci if 'RUC' in k.replace('.', '')), None)
+        c_num = next((ci[k] for k in ci if k.startswith(('NÚMERO', 'NUMERO'))), None)
         actual: list[dict] = []
         fecha_actual = None
 
@@ -160,6 +165,8 @@ def leer_historial_excel(origen) -> ResumenHistorial:
                          glosa=_limpio(vals[c_glosa]) if c_glosa is not None else '')
             if c_ruc is not None and re.fullmatch(r'\d{11}', _limpio(vals[c_ruc])):
                 linea['ruc'] = _limpio(vals[c_ruc])
+            if c_num is not None and _limpio(vals[c_num]):
+                linea['numero'] = _limpio(vals[c_num])
             actual.append(linea)
             res.descripciones.setdefault(cta, linea['descripcion'])
         cerrar()

@@ -261,7 +261,20 @@ def procesar_lote(comprobantes: list[Comprobante], ctx: Contexto) -> list[Propue
             # ---- 4. plan de cuentas ----
             p.candidatas = candidatas_para(p.familia, ctx)
             cu, razon = elegir_candidata(p.candidatas, ctx, pcge.familia_por_prefijo(p.familia), texto_items(c))
-            if cu:
+            # La práctica de la empresa manda sobre la teoría: si a este proveedor ya se le contabilizó varias veces
+            # en una cuenta que la empresa sí usa, y la cuenta "de manual" nunca la ha usado, preferimos la memoria.
+            if memo_otro and cu and not ctx.historial_stats.get(cu.codigo) and memo_otro[0]['veces'] >= 2:
+                m = memo_otro[0]
+                p.cuenta, p.fuente = m['cuenta'], 'memoria'
+                p.confianza = min(96, 88 + min(m['veces'], 8))
+                p.explicacion = f'{expl}; pero este proveedor ya fue contabilizado {m["veces"]} veces en {m["cuenta"]} y la empresa nunca usa {cu.codigo}.'
+                f2 = pcge.familia_por_prefijo(m['cuenta'])
+                if f2:
+                    p.familia, p.familia_nombre, p.concepto = f2['prefijo'], f2['nombre'], f2['prefijo']
+                cu = None
+            if p.cuenta and p.fuente == 'memoria':
+                pass
+            elif cu:
                 p.cuenta, p.fuente = cu.codigo, 'historial' if ctx.historial_stats.get(cu.codigo) else 'reglas'
                 base = {3: 88, 2: 84, 1: 72, 0: 55}[fuerza]
                 if fuerza == 3 and len(mezcla) == 1:

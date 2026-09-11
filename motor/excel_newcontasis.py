@@ -71,7 +71,8 @@ def fila_newcontasis(p: Propuesta, cuenta_haber: str, cuenta_icbper: str = '', c
     regimen = ''
     pct = imp = base_reg = ''
     if c.tiene_detraccion:
-        regimen, pct, imp, base_reg = 1, _n(c.detraccion_porcentaje), _n(c.detraccion_monto), _n(c.importe_total)
+        # AM = importe de la detracción: el depositado según la constancia si se cruzó; si no, el que declara el XML
+        regimen, pct, imp, base_reg = 1, _n(c.detraccion_porcentaje), _n(p.det_monto or c.detraccion_monto), _n(c.importe_total)
     elif c.tiene_percepcion:
         regimen, pct, imp, base_reg = 2, _n(c.percepcion_porcentaje), _n(c.percepcion_monto), _n(c.importe_total)
     elif c.tiene_retencion:

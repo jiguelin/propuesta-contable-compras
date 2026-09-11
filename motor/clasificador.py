@@ -51,6 +51,7 @@ class Propuesta:
     posible_activo: bool = False
     det_constancia: str = ''
     det_fecha: object = None
+    det_monto: float = 0.0          # monto depositado según la constancia (si se cruzó)
 
     @property
     def semaforo(self) -> str:

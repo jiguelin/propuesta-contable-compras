@@ -174,7 +174,9 @@ def cruzar(propuestas, constancias: list[Constancia]) -> tuple[int, list[Constan
         clave = (p.c.ruc_emisor, serie, num.lstrip('0') or '0')
         c = indice.get(clave)
         if c:
-            p.det_constancia, p.det_fecha = c.numero, c.fecha
+            p.det_constancia, p.det_fecha, p.det_monto = c.numero, c.fecha, c.monto
+            if c.monto and p.c.detraccion_monto and abs(float(p.c.detraccion_monto) - c.monto) > 1.0:
+                p.alertas.append(f'El depósito de la constancia (S/ {c.monto:,.2f}) difiere del monto de detracción del XML (S/ {float(p.c.detraccion_monto):,.2f}).')
             usadas.add(clave)
             n += 1
             p.alertas = [a for a in p.alertas if 'constancia' not in a.lower()]

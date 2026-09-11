@@ -340,7 +340,7 @@ def procesar_lote(comprobantes: list[Comprobante], ctx: Contexto) -> list[Propue
             p.alertas.append(f'Sin tipo de cambio para {c.fecha_emision}: cargue el PDF SUNAT del mes.')
             p.estado = 'revisar'
         else:
-            p.alertas.append(f'Sin tipo de cambio para {c.fecha_emision} (se pondrá 1.0000). Cargue el PDF SUNAT del mes.')
+            p.alertas.append(f'Sin tipo de cambio para {c.fecha_emision} (columna W quedará en blanco). Cargue el PDF SUNAT del mes.')
 
         # ---- sospecha de activo fijo ----
         tc_val = p.tc or 1.0

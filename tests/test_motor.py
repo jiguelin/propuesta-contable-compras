@@ -22,7 +22,7 @@ def plan_minimo() -> bytes:
     wb = openpyxl.Workbook()
     ws = wb.active
     for cod, desc in [('4212', 'EMITIDAS'), ('1011', 'CAJA MN'), ('6343094', 'MANTENIMIENTO PPE - ADM'), ('6343093', 'MANTENIMIENTO PPE - CDS'),
-                      ('603202521', 'SUMINISTROS COMBUSTIBLES'), ('6560094', 'SUMINISTROS - ADM'), ('6391094', 'GASTOS BANCARIOS - ADM')]:
+                      ('603202521', 'SUMINISTROS COMBUSTIBLES'), ('6560094', 'SUMINISTROS - ADM'), ('6391094', 'GASTOS BANCARIOS - ADM'), ('33611', 'EQUIPO DE COMPUTO')]:
         ws.append([cod, desc])
     buf = io.BytesIO()
     wb.save(buf)
@@ -58,24 +58,24 @@ def test_flujo_completo_y_aprendizaje(tmp_path):
     s.registrar_empresa('20611889683', 'ALQUMIN EIRL', plan_minimo())
     s.cargar_tc_pdf((DATOS / 'tipocambio_2026-05.pdf').read_bytes())
     archivos = [(f.name, f.read_bytes()) for f in DATOS.glob('*.xml')]
-    lote = s.procesar('20611889683', archivos, cuenta_haber='4212', usar_ia=False)
+    lote = s.procesar('20611889683', archivos, cuenta_haber='4212', usar_ia=False, excluir_detraccion_sin_constancia=False)
     por_ruc = {p.c.ruc_emisor: p for p in lote.propuestas}
     banco, serv = por_ruc['20100047218'], por_ruc['20100000001']
     assert banco.estado == 'excluido' and 'Banco' in banco.motivo
     assert serv.estado in ('ok', 'revisar') and serv.cuenta.startswith('6343') and serv.tc == 3.435
     assert any('detracción' in a for a in serv.alertas)
 
-    # Excel de importación: 1 fila, 50 columnas, cuenta del haber en AH, régimen 1 en AK, moneda D
+    # Excel de importación: 2 filas (servicio USD + laptop), 50 columnas, cuenta del haber en AH, régimen 1 en AK, moneda D
     wb = openpyxl.load_workbook(filename=_bytes_io(lote.excel_importacion()))
     ws = wb.active
-    assert ws.max_row == 1 and ws.max_column == len(CABECERAS) == 50
-    fila = [c.value for c in ws[1]]
+    assert ws.max_row == 2 and ws.max_column == len(CABECERAS) == 50
+    fila = next([c.value for c in r] for r in ws.iter_rows() if r[7].value == '20100000001')
     assert fila[2] == '01' and fila[3] == 'F001' and fila[5] == '000123' and fila[27] == 'D' and fila[22] == 3.435
     assert fila[31] == serv.cuenta and fila[33] == '4212' and fila[36] == 1 and fila[30] == 'CRE'
 
     # corrección manual → memoria → segundo lote sale con alta confianza
     s.aplicar_correccion(lote, serv.id, '6343093')
-    lote2 = s.procesar('20611889683', archivos, cuenta_haber='1011', usar_ia=False)
+    lote2 = s.procesar('20611889683', archivos, cuenta_haber='1011', usar_ia=False, excluir_detraccion_sin_constancia=False)
     serv2 = {p.c.ruc_emisor: p for p in lote2.propuestas}['20100000001']
     assert serv2.cuenta == '6343093' and serv2.fuente == 'memoria' and serv2.confianza >= 92
     assert 'RESUMEN' in lote2.reporte_txt() and lote2.zip_todo()
@@ -107,3 +107,10 @@ def test_periodo_constancias_activo_y_usd(tmp_path):
     lap = por_ruc['20100000002']
     assert lap.posible_activo and any('ACTIVO FIJO' in a for a in lap.alertas)
     assert fila_newcontasis(lap, '4212')[22] == 3.52                                          # TC también para soles
+    # sin constancia → la factura con detracción queda fuera del Excel (regla tributaria)
+    lote3 = s.procesar('20611889683', archivos, cuenta_haber='4212', usar_ia=False, periodo='2026-05')
+    serv3 = {p.c.ruc_emisor: p for p in lote3.propuestas}['20100000001']
+    assert serv3.estado == 'excluido' and 'constancia' in serv3.motivo
+    import openpyxl, io
+    ws = openpyxl.load_workbook(io.BytesIO(lote3.excel_importacion())).active
+    assert ws.max_row == 1 and ws['H1'].value == '20100000002' and ws['W1'].value == 3.52

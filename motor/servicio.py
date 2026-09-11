@@ -158,7 +158,8 @@ class Servicio:
 
     def procesar(self, ruc: str, archivos: list[tuple[str, bytes]], cuenta_haber: str | None = None, periodo: str = '',
                  usar_ia: bool = True, excluir_bancos: bool = True, alerta_monto: float | None = None, umbral_ia: int = 90,
-                 constancias: list[tuple[str, bytes]] | None = None, usd_en_soles: bool = True, umbral_activo: float = 1800) -> Lote:
+                 constancias: list[tuple[str, bytes]] | None = None, usd_en_soles: bool = True, umbral_activo: float = 1800,
+                 excluir_detraccion_sin_constancia: bool = True) -> Lote:
         e = self.db.empresa(ruc) or {'nombre': ruc, 'cuenta_haber': '4212', 'alerta_monto': 20000}
         cuenta_haber = (cuenta_haber or e['cuenta_haber'] or '4212').strip()
         alerta_monto = alerta_monto if alerta_monto is not None else e['alerta_monto']
@@ -180,6 +181,14 @@ class Servicio:
         if constancias:
             lista = leer_constancias(constancias)
             lote.n_constancias, lote.constancias_sin_factura = cruzar(props, lista)
+        if excluir_detraccion_sin_constancia:
+            # Regla tributaria: sin el depósito de la detracción no se puede usar el crédito fiscal → no entra al Excel.
+            for p in props:
+                if p.estado in ('ok', 'revisar') and p.c.tiene_detraccion and not p.det_constancia:
+                    p.estado = 'excluido'
+                    p.motivo = (f'Detracción {p.c.detraccion_porcentaje}% (S/ {p.c.detraccion_monto}) sin constancia de depósito: no se puede usar el IGV todavía. '
+                                'Cuando tenga la constancia, vuelva a generar incluyéndola (o regístrela en el mes en que se pagó).')
+                    p.alertas = [a for a in p.alertas if 'constancia' not in a.lower()]
         r = lote.resumen
         self.db.registrar_lote(ruc, periodo, r['total'], r['ok'], r['excluidos'], r['revisar'], r)
         return lote

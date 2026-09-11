@@ -79,7 +79,7 @@ def fila_newcontasis(p: Propuesta, cuenta_haber: str, cuenta_icbper: str = '', c
 
     # NewContaSis lee los importes J–S en SOLES; para documentos en dólares se convierten con el TC de la fecha
     # y el importe original en dólares va en AC (equivalente en USD). Si usd_en_soles=False se dejan en la moneda original.
-    tc = p.tc or (1.0 if not es_usd else '')          # sin TC en dólares: W en blanco y montos sin convertir (la fila queda en 'revisar')
+    tc = p.tc if p.tc else ''                          # W = TC venta SUNAT de la fecha (soles y dólares); sin TC cargado queda en blanco y se avisa
     k = Decimal(str(tc)) if (es_usd and usd_en_soles and p.tc) else Decimal(1)
     no_grav = _n((c.exoneradas + c.inafectas) * k)
     otros_trib = _n((c.otros_tributos + c.otros_cargos) * k)

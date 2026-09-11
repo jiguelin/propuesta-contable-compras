@@ -91,6 +91,12 @@ Sin API key la app funciona igual (solo reglas + plan + memoria).
 - **Posible activo fijo**: compras de equipos/muebles/vehículos/software con importe ≥ S/ 1,800 (configurable) se marcan, aparecen en el filtro "Posibles activos fijos" y en el reporte.
 - Columna AV: la familia 6315 (peajes, estacionamiento, viáticos) sale con **5**.
 
+## Novedades v0.2.1
+
+- **Detracción sin constancia → fuera del Excel** (regla tributaria: sin depósito no hay crédito fiscal). Queda en EXCLUIDOS, en el filtro "Con detracción" y en el reporte como pendiente; al pagar la detracción se vuelve a generar con la constancia. Desactivable con una casilla.
+- Constancias: varios archivos y varios meses a la vez (TXT/CSV/Excel/PDF/ZIP mezclados).
+- Columna W: si no hay TC cargado para la fecha, queda en blanco (antes ponía 1.0000 en soles) y la app avisa en rojo si falta el TC del mes elegido.
+
 ## Hoja de ruta
 
 - **v0.1 (esta)**: flujo completo XML → Excel + reporte, memoria por proveedor+concepto, TC, detracción, IA opcional.

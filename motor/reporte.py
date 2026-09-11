@@ -26,7 +26,7 @@ def generar_reporte_txt(props: list[Propuesta], empresa: str, ruc: str, periodo:
     L.append(f'  Bancos / excluidos   : {r["excluidos"]}')
     L.append(f'  Duplicados           : {r["duplicados"]}')
     L.append(f'  XML ilegibles        : {r["errores"]}')
-    det = [p for p in props if p.estado in ('ok', 'revisar') and p.c.tiene_detraccion]
+    det = [p for p in props if p.c.tiene_detraccion and (p.estado in ('ok', 'revisar') or 'constancia' in (p.motivo or '').lower())]
     act = [p for p in props if p.estado in ('ok', 'revisar') and p.posible_activo]
     L.append(f'  Con detracción       : {len(det)}   (con constancia: {sum(1 for p in det if p.det_constancia)})')
     L.append(f'  Posible activo fijo  : {len(act)}')
@@ -35,7 +35,7 @@ def generar_reporte_txt(props: list[Propuesta], empresa: str, ruc: str, periodo:
         L.append('DETRACCIONES')
         for p in det:
             L.append(f'  - {p.c.serie_numero}  {p.c.nombre_emisor[:35]}  {p.c.detraccion_porcentaje}% S/ {float(p.c.detraccion_monto):,.2f}  → '
-                     + (f'constancia {p.det_constancia} ({p.det_fecha:%d/%m/%Y})' if p.det_constancia else 'SIN CONSTANCIA'))
+                     + (f'constancia {p.det_constancia} ({p.det_fecha:%d/%m/%Y})' if p.det_constancia else ('SIN CONSTANCIA → EXCLUIDA DEL EXCEL (pendiente para cuando se pague la detracción)' if p.estado == 'excluido' else 'SIN CONSTANCIA')))
         if constancias_sin_factura:
             L.append('  Constancias cargadas que no corresponden a ninguna factura del lote:')
             for ct in constancias_sin_factura:

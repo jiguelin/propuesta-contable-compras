@@ -9,7 +9,7 @@
   
   <cac:PaymentTerms><cbc:ID>FormaPago</cbc:ID><cbc:PaymentMeansID>Credito</cbc:PaymentMeansID></cac:PaymentTerms>
   <cac:TaxTotal><cbc:TaxAmount currencyID="PEN">540.00</cbc:TaxAmount><cac:TaxSubtotal><cbc:TaxableAmount currencyID="PEN">3000.00</cbc:TaxableAmount><cbc:TaxAmount currencyID="PEN">540.00</cbc:TaxAmount><cac:TaxCategory><cac:TaxScheme><cbc:ID>1000</cbc:ID><cbc:Name>IGV</cbc:Name></cac:TaxScheme></cac:TaxCategory></cac:TaxSubtotal></cac:TaxTotal>
-  <cac:LegalMonetaryTotal><cbc:LineExtensionAmount currencyID="PEN">3000.00</cbc:LineExtensionAmount><cbc:PayableAmount currencyID="PEN">1540.00</cbc:PayableAmount></cac:LegalMonetaryTotal>
+  <cac:LegalMonetaryTotal><cbc:LineExtensionAmount currencyID="PEN">3000.00</cbc:LineExtensionAmount><cbc:PayableAmount currencyID="PEN">3540.00</cbc:PayableAmount></cac:LegalMonetaryTotal>
   <cac:InvoiceLine><cbc:ID>1</cbc:ID><cbc:InvoicedQuantity unitCode="NIU">1</cbc:InvoicedQuantity><cbc:LineExtensionAmount currencyID="PEN">3000.00</cbc:LineExtensionAmount>
     <cac:TaxTotal><cbc:TaxAmount currencyID="PEN">540.00</cbc:TaxAmount><cac:TaxSubtotal><cbc:TaxAmount currencyID="PEN">540.00</cbc:TaxAmount><cac:TaxCategory><cbc:TaxExemptionReasonCode>10</cbc:TaxExemptionReasonCode><cac:TaxScheme><cbc:ID>1000</cbc:ID><cbc:Name>IGV</cbc:Name></cac:TaxScheme></cac:TaxCategory></cac:TaxSubtotal></cac:TaxTotal>
     <cac:Item><cbc:Description>LAPTOP LENOVO THINKPAD 16GB</cbc:Description></cac:Item><cac:Price><cbc:PriceAmount currencyID="PEN">3000.00</cbc:PriceAmount></cac:Price></cac:InvoiceLine>

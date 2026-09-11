@@ -218,20 +218,24 @@ if archivos:
         opciones_mes = [f'{m}  ({n} comprobantes)' for m, n in sorted(meses.items(), key=lambda x: -x[1])]
         elegido = st.selectbox('Mes a trabajar (todo lo que no sea de este mes se excluye del Excel)', opciones_mes)
         periodo = elegido.split()[0]
+        if periodo not in S.tc_meses():
+            st.error(f'No hay tipo de cambio cargado para {periodo}: la columna W del Excel quedará en blanco. Suba el PDF SUNAT de ese mes en la barra lateral antes de generar.')
         otros = sum(n for m, n in meses.items() if m != periodo)
         if otros:
             st.caption(f'Se excluirán {otros} comprobante(s) de otros meses; quedarán listados en la hoja EXCLUIDOS y en el reporte.')
 
 with st.expander('Constancias de detracción (opcional): TXT/CSV/Excel de SUNAT o los PDF individuales, sueltos o en ZIP'):
     constancias_up = st.file_uploader('Constancias', type=['txt', 'csv', 'xlsx', 'xls', 'pdf', 'zip'], accept_multiple_files=True, label_visibility='collapsed')
-    st.caption('Se cruzan por RUC del proveedor + serie + número y llenan las columnas U/V (y AO/AP) solo en las facturas afectas. Lo que no cruce se informa, nunca se inventa.')
+    st.caption('Puede subir varios archivos a la vez y de varios meses (TXT, CSV, Excel, PDF o ZIP mezclados). Se cruzan por RUC del proveedor + serie + número y llenan las columnas U/V (y AO/AP) solo en las facturas afectas. Lo que no cruce se informa, nunca se inventa.')
+    excluir_det = st.checkbox('Excluir del Excel las facturas con detracción que no tengan constancia de depósito (regla tributaria: sin depósito no hay crédito fiscal)', value=True)
 
 if st.button('GENERAR PROPUESTA', type='primary', disabled=not archivos, use_container_width=True):
     with st.spinner('Leyendo XML y proponiendo cuentas…'):
         try:
             ss.lote = S.procesar(ruc, [(f.name, f.getvalue()) for f in archivos], cuenta_haber=cuenta_haber, periodo=periodo,
                                  usar_ia=usar_ia, excluir_bancos=excluir_bancos, alerta_monto=alerta_monto, umbral_activo=umbral_activo,
-                                 constancias=[(f.name, f.getvalue()) for f in (constancias_up or [])] or None)
+                                 constancias=[(f.name, f.getvalue()) for f in (constancias_up or [])] or None,
+                                 excluir_detraccion_sin_constancia=excluir_det)
             ss.confirmado = False
         except Exception as ex:
             st.error(f'No se pudo procesar: {ex}')
@@ -244,7 +248,8 @@ if not lote:
 r = lote.resumen
 st.markdown('---')
 st.subheader(f'{lote.empresa} · periodo {lote.periodo}')
-n_det = sum(1 for p in lote.propuestas if p.estado in ('ok', 'revisar') and (p.c.tiene_detraccion or p.det_constancia))
+n_det = sum(1 for p in lote.propuestas if p.c.tiene_detraccion or p.det_constancia)
+n_det_exc = sum(1 for p in lote.propuestas if p.estado == 'excluido' and p.c.tiene_detraccion and 'constancia' in (p.motivo or '').lower())
 n_act = sum(1 for p in lote.propuestas if p.estado in ('ok', 'revisar') and p.posible_activo)
 m = st.columns(8)
 m[0].metric('XML recibidos', r['total'])
@@ -253,7 +258,9 @@ m[2].metric('🟢 Alta confianza', r['verde'])
 m[3].metric('🟡 Revisar rápido', r['amarillo'])
 m[4].metric('🔴 Revisión obligatoria', r['rojo'])
 m[5].metric('Excluidos / dup.', r['excluidos'] + r['duplicados'] + r['errores'])
-m[6].metric('Con detracción', n_det, help=f'{sum(1 for p in lote.propuestas if p.det_constancia)} con constancia cruzada')
+m[6].metric('Con detracción', n_det, help=f'{sum(1 for p in lote.propuestas if p.det_constancia)} con constancia cruzada · {n_det_exc} excluidas por falta de constancia')
+if n_det_exc:
+    st.warning(f'{n_det_exc} factura(s) con detracción quedaron FUERA del Excel por no tener constancia de depósito. Están en el filtro "Con detracción" y en la hoja EXCLUIDOS; cuando se pague la detracción, vuelva a generar con la constancia.')
 m[7].metric('Posible activo fijo', n_act)
 if lote.constancias_sin_factura:
     st.warning(f'{len(lote.constancias_sin_factura)} constancia(s) de detracción no corresponden a ninguna factura del lote: ' +
@@ -282,7 +289,7 @@ if filtro == 'Solo con observaciones':
 elif filtro == 'Solo 🔴/🟡':
     props = [p for p in props if p.semaforo in ('🔴', '🟡')]
 elif filtro == 'Con detracción':
-    props = [p for p in props if p.estado in ('ok', 'revisar') and (p.c.tiene_detraccion or p.det_constancia)]
+    props = [p for p in props if p.c.tiene_detraccion or p.det_constancia]
 elif filtro == 'Posibles activos fijos':
     props = [p for p in props if p.estado in ('ok', 'revisar') and p.posible_activo]
 elif filtro == 'Dólares':

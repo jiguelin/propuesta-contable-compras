@@ -7,7 +7,8 @@ from datetime import datetime
 from .clasificador import Propuesta, resumen
 
 
-def generar_reporte_txt(props: list[Propuesta], empresa: str, ruc: str, periodo: str, cuenta_haber: str, alerta_monto: float, tc_meses: list[str]) -> str:
+def generar_reporte_txt(props: list[Propuesta], empresa: str, ruc: str, periodo: str, cuenta_haber: str, alerta_monto: float, tc_meses: list[str],
+                        constancias_sin_factura: list | None = None, n_constancias: int = 0) -> str:
     r = resumen(props)
     L = []
     L.append('PROPUESTA CONTABLE DE COMPRAS')
@@ -25,7 +26,26 @@ def generar_reporte_txt(props: list[Propuesta], empresa: str, ruc: str, periodo:
     L.append(f'  Bancos / excluidos   : {r["excluidos"]}')
     L.append(f'  Duplicados           : {r["duplicados"]}')
     L.append(f'  XML ilegibles        : {r["errores"]}')
+    det = [p for p in props if p.estado in ('ok', 'revisar') and p.c.tiene_detraccion]
+    act = [p for p in props if p.estado in ('ok', 'revisar') and p.posible_activo]
+    L.append(f'  Con detracción       : {len(det)}   (con constancia: {sum(1 for p in det if p.det_constancia)})')
+    L.append(f'  Posible activo fijo  : {len(act)}')
     L.append('')
+    if det:
+        L.append('DETRACCIONES')
+        for p in det:
+            L.append(f'  - {p.c.serie_numero}  {p.c.nombre_emisor[:35]}  {p.c.detraccion_porcentaje}% S/ {float(p.c.detraccion_monto):,.2f}  → '
+                     + (f'constancia {p.det_constancia} ({p.det_fecha:%d/%m/%Y})' if p.det_constancia else 'SIN CONSTANCIA'))
+        if constancias_sin_factura:
+            L.append('  Constancias cargadas que no corresponden a ninguna factura del lote:')
+            for ct in constancias_sin_factura:
+                L.append(f'    · {ct.numero}  RUC {ct.ruc_proveedor}  {ct.serie}-{ct.numero_doc}  S/ {ct.monto:,.2f}  {ct.fecha:%d/%m/%Y}' if ct.fecha else f'    · {ct.numero}  RUC {ct.ruc_proveedor}  {ct.serie}-{ct.numero_doc}')
+        L.append('')
+    if act:
+        L.append('POSIBLES ACTIVOS FIJOS (validar cuenta y registrar en el módulo de activos)')
+        for p in act:
+            L.append(f'  - {p.c.serie_numero}  {p.c.nombre_emisor[:35]}  {p.c.simbolo} {float(p.c.importe_total):,.2f}  cuenta {p.cuenta}')
+        L.append('')
 
     obs = [p for p in props if p.estado in ('ok', 'revisar') and (p.alertas or p.estado == 'revisar' or p.confianza < 85)]
     L.append(f'OBSERVACIONES ({len(obs)})')
@@ -48,7 +68,7 @@ def generar_reporte_txt(props: list[Propuesta], empresa: str, ruc: str, periodo:
     L.append('')
     L.append('NOTAS')
     L.append(f'  · Alerta configurada para importes ≥ S/ {alerta_monto:,.0f}.')
-    L.append('  · Las constancias de depósito de detracción no vienen en el XML: completar U/V y AN-AP en NewContaSis o en el Excel.')
+    L.append('  · Detracciones sin constancia: suba el TXT/CSV/Excel de constancias de SUNAT (o los PDF) y vuelva a generar; o complete U/V en NewContaSis.')
     L.append('  · Las facturas mixtas usan una sola cuenta (la del mayor importe); cámbiela si corresponde.')
     L.append('  · Cada corrección de cuenta que haga en la app queda en la memoria de la empresa para el próximo mes.')
     return '\n'.join(L)

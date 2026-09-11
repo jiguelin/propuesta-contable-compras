@@ -58,7 +58,7 @@ def _serie_numero(sn: str) -> tuple[str, str]:
     return sn[:6], ''
 
 
-def fila_newcontasis(p: Propuesta, cuenta_haber: str, cuenta_icbper: str = '', cuenta_otros_tributos: str = '') -> list:
+def fila_newcontasis(p: Propuesta, cuenta_haber: str, cuenta_icbper: str = '', cuenta_otros_tributos: str = '', usd_en_soles: bool = True) -> list:
     c = p.c
     serie, numero = _serie_numero(c.serie_numero)
     f_emi = _f(c.fecha_emision)
@@ -77,24 +77,35 @@ def fila_newcontasis(p: Propuesta, cuenta_haber: str, cuenta_icbper: str = '', c
     elif c.tiene_retencion:
         regimen, imp, base_reg = 3, _n(c.retencion_monto), _n(c.importe_total)
 
-    no_grav = _n(c.exoneradas + c.inafectas)
-    otros_trib = _n(c.otros_tributos + c.otros_cargos)
+    # NewContaSis lee los importes J–S en SOLES; para documentos en dólares se convierten con el TC de la fecha
+    # y el importe original en dólares va en AC (equivalente en USD). Si usd_en_soles=False se dejan en la moneda original.
+    tc = p.tc or (1.0 if not es_usd else '')          # sin TC en dólares: W en blanco y montos sin convertir (la fila queda en 'revisar')
+    k = Decimal(str(tc)) if (es_usd and usd_en_soles and p.tc) else Decimal(1)
+    no_grav = _n((c.exoneradas + c.inafectas) * k)
+    otros_trib = _n((c.otros_tributos + c.otros_cargos) * k)
+    constancia_fecha = _f(p.det_fecha.isoformat()) if p.det_fecha else None
     ref_tipo = ref_serie = ref_num = ''
     if c.tipo_codigo in ('07', '08') and c.doc_referencia:
         ref_tipo = '01' if c.doc_referencia[:1].upper() == 'F' else ('03' if c.doc_referencia[:1].upper() == 'B' else '01')
         ref_serie, ref_num = _serie_numero(c.doc_referencia)
 
+    gravadas, igv, isc, total = _n(c.gravadas * k), _n(c.igv * k), _n(c.isc * k), _n(c.importe_total * k)
+    if k != 1:   # cuadrar centavos de redondeo contra el IGV para que J+K+P+Q+R = S
+        dif = round(total - (gravadas + igv + no_grav + isc + otros_trib), 2)
+        if 0 < abs(dif) <= 0.05:
+            igv = _n(igv + dif)
+
     return [
         f_emi, f_ven, c.tipo_codigo, serie, '', numero, tipo_prov, c.ruc_emisor[:11], c.nombre_emisor[:60],   # A-I
-        _n(c.gravadas), _n(c.igv), 0.0, 0.0, 0.0, 0.0, no_grav, _n(c.isc), otros_trib, _n(c.importe_total),  # J-S
-        '', '', None,                                                                                          # T-V  (constancia de detracción: no viene en el XML)
-        (p.tc if es_usd else 1.0) or 1.0,                                                                      # W
+        gravadas, igv, 0.0, 0.0, 0.0, 0.0, no_grav, isc, otros_trib, total,                                   # J-S
+        '', p.det_constancia or '', constancia_fecha,                                                          # T-V  constancia de detracción (si se cargó)
+        tc,                                                                                                    # W  TC de la fecha (soles y dólares)
         None, ref_tipo, ref_serie, ref_num,                                                                     # X-AA
         'D' if es_usd else 'S', _n(c.importe_total) if es_usd else '', f_ven, condicion,                        # AB-AE
         p.cuenta, (cuenta_otros_tributos or p.cuenta) if otros_trib else '', cuenta_haber, '', '',              # AF-AJ
-        regimen, pct, imp, '', '', None, '',                                                                    # AK-AQ
+        regimen, pct, imp, '', p.det_constancia or '', constancia_fecha, '',                                    # AK-AQ (AO/AP = constancia)
         18.0 if c.igv else 0.0, p.glosa[:60],                                                                   # AR-AS
-        '1' if c.tiene_percepcion else '', base_reg,                                                            # AT-AU
+        '1' if c.tiene_percepcion else '', _n(Decimal(str(base_reg)) * k) if base_reg != '' else '',            # AT-AU
         p.av, _n(c.icbper) if c.icbper else '', (cuenta_icbper if c.icbper else ''),                            # AV-AX
     ]
 
@@ -116,12 +127,12 @@ def _escribir_filas(ws, filas, inicio=1):
                 cell.number_format = '@'
 
 
-def generar_excel_importacion(props: list[Propuesta], cuenta_haber: str, cuenta_icbper: str = '', con_cabecera: bool = False) -> bytes:
+def generar_excel_importacion(props: list[Propuesta], cuenta_haber: str, cuenta_icbper: str = '', con_cabecera: bool = False, usd_en_soles: bool = True) -> bytes:
     """Excel listo para importar: solo filas de datos (o con cabecera de referencia si con_cabecera)."""
     wb = Workbook()
     ws = wb.active
     ws.title = 'COMPRAS'
-    filas = [fila_newcontasis(p, cuenta_haber, cuenta_icbper) for p in props if p.estado in ('ok', 'revisar') and p.cuenta]
+    filas = [fila_newcontasis(p, cuenta_haber, cuenta_icbper, usd_en_soles=usd_en_soles) for p in props if p.estado in ('ok', 'revisar') and p.cuenta]
     inicio = 1
     if con_cabecera:
         ws.append(CABECERAS)
@@ -134,14 +145,14 @@ def generar_excel_importacion(props: list[Propuesta], cuenta_haber: str, cuenta_
     return buf.getvalue()
 
 
-def generar_excel_revision(props: list[Propuesta], cuenta_haber: str, empresa: str, periodo: str) -> bytes:
+def generar_excel_revision(props: list[Propuesta], cuenta_haber: str, empresa: str, periodo: str, usd_en_soles: bool = True) -> bytes:
     """Excel amigable: hoja PROPUESTA (todas las filas con semáforo), REVISAR, EXCLUIDOS, y NEWCONTASIS (con cabecera)."""
     wb = Workbook()
     ws = wb.active
     ws.title = 'PROPUESTA'
     verde, amarillo, rojo, gris = 'C6EFCE', 'FFEB9C', 'FFC7CE', 'E7E6E6'
     cab = ['Semáforo', 'Confianza', 'Estado', 'Fecha', 'Tipo', 'Serie-Número', 'RUC', 'Proveedor', 'Moneda', 'Base', 'IGV', 'Total', 'TC',
-           'Cuenta', 'Descripción cuenta', 'Cuenta haber', 'Clasif. NCS', 'Fuente', 'Detracción', 'Glosa', 'Alertas', 'Explicación', 'Archivo']
+           'Cuenta', 'Descripción cuenta', 'Cuenta haber', 'Clasif. NCS', 'Fuente', 'Detracción', 'Constancia', 'Fecha depósito', 'Activo fijo?', 'Glosa', 'Alertas', 'Explicación', 'Archivo']
     ws.append([f'{empresa} — Propuesta contable de compras — {periodo}'])
     ws['A1'].font = Font(bold=True, size=13)
     ws.append([])
@@ -154,12 +165,13 @@ def generar_excel_revision(props: list[Propuesta], cuenta_haber: str, empresa: s
         fila = [p.semaforo, p.confianza if p.estado in ('ok', 'revisar') else '', p.estado.upper() + (f' — {p.motivo}' if p.motivo else ''),
                 c.fecha_emision, c.tipo_codigo, c.serie_numero, c.ruc_emisor, c.nombre_emisor, c.moneda_codigo, _n(c.gravadas) or _n(c.valor_venta), _n(c.igv), _n(c.importe_total),
                 p.tc if p.tc else '', p.cuenta, p.cuenta_desc, cuenta_haber if p.cuenta else '', p.av if p.cuenta else '', p.fuente,
-                f'{c.detraccion_porcentaje}% S/ {c.detraccion_monto}' if c.tiene_detraccion else '', p.glosa, ' | '.join(p.alertas), p.explicacion, c.archivo]
+                f'{c.detraccion_porcentaje}% S/ {c.detraccion_monto}' if c.tiene_detraccion else '', p.det_constancia, p.det_fecha.strftime('%d/%m/%Y') if p.det_fecha else '',
+                'SÍ' if p.posible_activo else '', p.glosa, ' | '.join(p.alertas), p.explicacion, c.archivo]
         ws.append(fila)
         color = {'🟢': verde, '🟡': amarillo, '🔴': rojo, '⚪': gris}[p.semaforo]
         for cell in ws[ws.max_row][:3]:
             cell.fill = PatternFill('solid', fgColor=color)
-    anchos = [9, 10, 22, 11, 6, 16, 13, 36, 8, 11, 10, 11, 8, 11, 40, 11, 9, 10, 16, 40, 60, 60, 30]
+    anchos = [9, 10, 22, 11, 6, 16, 13, 36, 8, 11, 10, 11, 8, 11, 40, 11, 9, 10, 16, 12, 12, 10, 40, 60, 60, 30]
     for j, w in enumerate(anchos, start=1):
         ws.column_dimensions[get_column_letter(j)].width = w
     ws.freeze_panes = 'A4'
@@ -189,7 +201,7 @@ def generar_excel_revision(props: list[Propuesta], cuenta_haber: str, empresa: s
     for cell in ws4[1]:
         cell.font = Font(bold=True, size=8)
         cell.alignment = Alignment(wrap_text=True)
-    _escribir_filas(ws4, [fila_newcontasis(p, cuenta_haber) for p in props if p.estado in ('ok', 'revisar') and p.cuenta], 2)
+    _escribir_filas(ws4, [fila_newcontasis(p, cuenta_haber, usd_en_soles=usd_en_soles) for p in props if p.estado in ('ok', 'revisar') and p.cuenta], 2)
     for j in range(1, 51):
         ws4.column_dimensions[get_column_letter(j)].width = 13
     ws4.freeze_panes = 'A2'

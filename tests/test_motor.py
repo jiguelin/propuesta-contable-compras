@@ -84,3 +84,26 @@ def test_flujo_completo_y_aprendizaje(tmp_path):
 def _bytes_io(b: bytes):
     import io
     return io.BytesIO(b)
+
+
+def test_periodo_constancias_activo_y_usd(tmp_path):
+    from datetime import date
+    from motor.tipo_cambio import TC
+    from motor.excel_newcontasis import fila_newcontasis
+    s = Servicio(ruta_db=tmp_path / 'p.db')
+    s.registrar_empresa('20611889683', 'ALQUMIN EIRL', plan_minimo())
+    s.db.guardar_tc([TC(date(2026, 5, d), 3.50, 3.52) for d in range(1, 32)])
+    archivos = [(f.name, f.read_bytes()) for f in DATOS.glob('*.xml')]
+    txt = ('Numero Constancia|RUC Proveedor|Fecha Pago|Monto Deposito|Serie de Comprobante|Numero de Comprobante|\n'
+           '312739411|20100000001|20/05/2026|420.00|F001|00000123|\n999|20999999999|20/05/2026|1.00|F001|1|\n').encode()
+    lote = s.procesar('20611889683', archivos, cuenta_haber='4212', usar_ia=False, periodo='2026-05', constancias=[('c.txt', txt)])
+    por_ruc = {p.c.ruc_emisor: p for p in lote.propuestas}
+    serv = por_ruc['20100000001']
+    assert serv.det_constancia == '312739411' and serv.det_fecha == date(2026, 5, 20)
+    assert lote.n_constancias == 1 and [c.numero for c in lote.constancias_sin_factura] == ['999']
+    fila = fila_newcontasis(serv, '4212')
+    assert fila[20] == '312739411' and fila[22] == 3.52 and fila[27] == 'D'
+    assert fila[9] == 3520.0 and fila[18] == round(1180 * 3.52, 2) and fila[28] == 1180.0   # USD → soles en J..S, USD en AC
+    lap = por_ruc['20100000002']
+    assert lap.posible_activo and any('ACTIVO FIJO' in a for a in lap.alertas)
+    assert fila_newcontasis(lap, '4212')[22] == 3.52                                          # TC también para soles

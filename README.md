@@ -82,6 +82,15 @@ Sin API key la app funciona igual (solo reglas + plan + memoria).
 > apuntar `PROPUESTA_DB` a un volumen persistente o migrar `motor/memoria.py` a Postgres (Supabase/Neon, plan gratuito).
 > Todo el acceso a datos está aislado en ese módulo justamente para que ese cambio no toque nada más.
 
+## Novedades v0.2.0
+
+- **Dólares**: las columnas J–S del Excel van en **soles** (importe × TC venta SUNAT de la fecha de emisión), W = TC y AC = importe original en USD. Así NewContaSis muestra el mismo importe en dólares que la factura.
+- **TC en todas las filas** (soles y dólares), según la fecha de emisión. Se pueden subir varios PDF de meses distintos a la vez; el historial se acumula.
+- **Mes a trabajar**: al subir los XML se elige el mes; todo comprobante de otro mes se excluye del Excel (queda en EXCLUIDOS y en el reporte).
+- **Constancias de detracción (opcional)**: TXT/CSV/Excel de SUNAT o PDF individuales (o ZIP). Se cruzan por RUC + serie + número y llenan U/V y AO/AP solo en las facturas afectas. Lo que no cruza se informa. Filtro "Con detracción" en la tabla.
+- **Posible activo fijo**: compras de equipos/muebles/vehículos/software con importe ≥ S/ 1,800 (configurable) se marcan, aparecen en el filtro "Posibles activos fijos" y en el reporte.
+- Columna AV: la familia 6315 (peajes, estacionamiento, viáticos) sale con **5**.
+
 ## Hoja de ruta
 
 - **v0.1 (esta)**: flujo completo XML → Excel + reporte, memoria por proveedor+concepto, TC, detracción, IA opcional.
@@ -92,7 +101,7 @@ Sin API key la app funciona igual (solo reglas + plan + memoria).
 
 Estos campos se llenaron según la plantilla y su documentación interna, pero **nunca se ha importado un mes real todavía**:
 
-- Importes (J–S) en la **moneda del documento** y W = tipo de cambio; AC = total en USD cuando la moneda es D.
+- Importes (J–S) en **soles** (USD convertidos con el TC venta de la fecha), W = tipo de cambio, AC = total en USD cuando la moneda es D. Si se comprueba que NewContaSis los espera en dólares, basta `usd_en_soles=False` en `Servicio.procesar`.
 - Columnas L/M/N/O (gravadas mixtas / destinadas a no gravadas) en 0: todas las compras se tratan como destinadas a operaciones gravadas.
 - B y AD (vencimiento) = fecha de vencimiento del XML o, si no trae, la de emisión.
 - AG (cuenta otros tributos) = misma cuenta del gasto cuando hay otros cargos.

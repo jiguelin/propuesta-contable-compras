@@ -132,14 +132,22 @@ with st.sidebar:
     st.markdown('<div class="paso">Tipo de cambio SUNAT</div>', unsafe_allow_html=True)
     meses = S.tc_meses()
     st.caption('Meses cargados: ' + (', '.join(meses[-6:]) if meses else 'ninguno'))
-    f = st.file_uploader('PDF mensual de SUNAT (o Excel fecha/compra/venta)', type=['pdf', 'xlsx', 'csv'], key='tc_up')
-    if f and st.button('Agregar al historial de TC'):
-        try:
-            n = S.cargar_tc_pdf(f.read()) if f.name.lower().endswith('.pdf') else S.cargar_tc_tabla(f.read())
-            st.success(f'{n} días agregados.')
+    fs = st.file_uploader('PDF mensuales de SUNAT (puede subir varios meses a la vez) o Excel fecha/compra/venta',
+                          type=['pdf', 'xlsx', 'csv'], accept_multiple_files=True, key='tc_up')
+    if fs and st.button('Agregar al historial de TC'):
+        total, errores = 0, []
+        for f in fs:
+            try:
+                total += S.cargar_tc_pdf(f.getvalue()) if f.name.lower().endswith('.pdf') else S.cargar_tc_tabla(f.getvalue())
+            except Exception as ex:
+                errores.append(f'{f.name}: {ex}')
+        if total:
+            st.success(f'{total} días agregados. Meses en el sistema: {", ".join(S.tc_meses())}')
+        for e in errores:
+            st.error(e)
+        if total and not errores:
             st.rerun()
-        except Exception as ex:
-            st.error(str(ex))
+    st.caption('El historial se acumula (nunca se borra). Ojo: en Streamlit Cloud gratuito los datos se pierden si la app se reinicia; para eso está prevista la base en la nube de la v0.2.')
 
     st.markdown('---')
     st.caption(f'v{__version__} · IA: {"Claude activo" if api_key() else "sin API key (solo reglas)"}')
@@ -193,6 +201,8 @@ with c3:
     st.markdown('<div class="paso">Opciones</div>', unsafe_allow_html=True)
     excluir_bancos = st.checkbox('Excluir comprobantes bancarios', value=True)
     usar_ia = st.checkbox('Usar IA en casos dudosos', value=bool(api_key()), disabled=not api_key())
+    umbral_activo = st.number_input('Sospechar activo fijo desde S/', min_value=0.0, value=1800.0, step=100.0,
+                                    help='Compras de equipos, muebles, vehículos, software, etc. con importe (incl. IGV) igual o mayor se marcan como posible activo fijo.')
 
 if (cuenta_haber != emp['cuenta_haber'] or alerta_monto != emp['alerta_monto']) and cuenta_haber:
     S.db.guardar_empresa(ruc, emp['nombre'], cuenta_haber, alerta_monto)
@@ -200,11 +210,28 @@ if (cuenta_haber != emp['cuenta_haber'] or alerta_monto != emp['alerta_monto']) 
 st.markdown('<div class="paso">XML del mes</div>', unsafe_allow_html=True)
 archivos = st.file_uploader('Arrastre los XML o un ZIP', type=['xml', 'zip'], accept_multiple_files=True, label_visibility='collapsed')
 
+periodo = ''
+if archivos:
+    lista = [(f.name, f.getvalue()) for f in archivos]
+    meses = S.meses_en_archivos(lista)
+    if meses:
+        opciones_mes = [f'{m}  ({n} comprobantes)' for m, n in sorted(meses.items(), key=lambda x: -x[1])]
+        elegido = st.selectbox('Mes a trabajar (todo lo que no sea de este mes se excluye del Excel)', opciones_mes)
+        periodo = elegido.split()[0]
+        otros = sum(n for m, n in meses.items() if m != periodo)
+        if otros:
+            st.caption(f'Se excluirán {otros} comprobante(s) de otros meses; quedarán listados en la hoja EXCLUIDOS y en el reporte.')
+
+with st.expander('Constancias de detracción (opcional): TXT/CSV/Excel de SUNAT o los PDF individuales, sueltos o en ZIP'):
+    constancias_up = st.file_uploader('Constancias', type=['txt', 'csv', 'xlsx', 'xls', 'pdf', 'zip'], accept_multiple_files=True, label_visibility='collapsed')
+    st.caption('Se cruzan por RUC del proveedor + serie + número y llenan las columnas U/V (y AO/AP) solo en las facturas afectas. Lo que no cruce se informa, nunca se inventa.')
+
 if st.button('GENERAR PROPUESTA', type='primary', disabled=not archivos, use_container_width=True):
     with st.spinner('Leyendo XML y proponiendo cuentas…'):
         try:
-            ss.lote = S.procesar(ruc, [(f.name, f.getvalue()) for f in archivos], cuenta_haber=cuenta_haber,
-                                 usar_ia=usar_ia, excluir_bancos=excluir_bancos, alerta_monto=alerta_monto)
+            ss.lote = S.procesar(ruc, [(f.name, f.getvalue()) for f in archivos], cuenta_haber=cuenta_haber, periodo=periodo,
+                                 usar_ia=usar_ia, excluir_bancos=excluir_bancos, alerta_monto=alerta_monto, umbral_activo=umbral_activo,
+                                 constancias=[(f.name, f.getvalue()) for f in (constancias_up or [])] or None)
             ss.confirmado = False
         except Exception as ex:
             st.error(f'No se pudo procesar: {ex}')
@@ -217,17 +244,24 @@ if not lote:
 r = lote.resumen
 st.markdown('---')
 st.subheader(f'{lote.empresa} · periodo {lote.periodo}')
-m = st.columns(6)
+n_det = sum(1 for p in lote.propuestas if p.estado in ('ok', 'revisar') and (p.c.tiene_detraccion or p.det_constancia))
+n_act = sum(1 for p in lote.propuestas if p.estado in ('ok', 'revisar') and p.posible_activo)
+m = st.columns(8)
 m[0].metric('XML recibidos', r['total'])
 m[1].metric('Contabilizados', r['ok'] + r['revisar'])
 m[2].metric('🟢 Alta confianza', r['verde'])
 m[3].metric('🟡 Revisar rápido', r['amarillo'])
 m[4].metric('🔴 Revisión obligatoria', r['rojo'])
 m[5].metric('Excluidos / dup.', r['excluidos'] + r['duplicados'] + r['errores'])
+m[6].metric('Con detracción', n_det, help=f'{sum(1 for p in lote.propuestas if p.det_constancia)} con constancia cruzada')
+m[7].metric('Posible activo fijo', n_act)
+if lote.constancias_sin_factura:
+    st.warning(f'{len(lote.constancias_sin_factura)} constancia(s) de detracción no corresponden a ninguna factura del lote: ' +
+               ', '.join(f'{c.numero} ({c.ruc_proveedor} {c.comprobante})' for c in lote.constancias_sin_factura[:8]) + ('…' if len(lote.constancias_sin_factura) > 8 else ''))
 
 st.markdown('<div class="paso">Revise y corrija la cuenta directamente en la tabla (doble clic en la celda "Cuenta")</div>', unsafe_allow_html=True)
 
-filtro = st.radio('Mostrar', ['Todos', 'Solo con observaciones', 'Solo 🔴/🟡', 'Excluidos'], horizontal=True, label_visibility='collapsed')
+filtro = st.radio('Mostrar', ['Todos', 'Solo con observaciones', 'Solo 🔴/🟡', 'Con detracción', 'Posibles activos fijos', 'Dólares', 'Excluidos'], horizontal=True, label_visibility='collapsed')
 
 
 def _fila(p):
@@ -235,7 +269,9 @@ def _fila(p):
     return {'id': p.id, '': p.semaforo, 'Conf.': p.confianza if p.estado in ('ok', 'revisar') else None, 'Fecha': c.fecha_emision,
             'Comprobante': c.serie_numero, 'Proveedor': c.nombre_emisor[:45], 'Mon.': c.moneda_codigo, 'Total': float(c.importe_total),
             'Descripción': (c.lineas[0].descripcion[:60] + (' …' if len(c.lineas) > 1 else '')) if c.lineas else '',
-            'Cuenta': p.cuenta, 'Cuenta (descripción)': p.cuenta_desc[:45], 'Fuente': p.fuente,
+            'TC': p.tc or None, 'Cuenta': p.cuenta, 'Cuenta (descripción)': p.cuenta_desc[:45], 'Fuente': p.fuente,
+            'Detracción': (f'{p.c.detraccion_porcentaje}% S/ {p.c.detraccion_monto}' if p.c.tiene_detraccion else '') + (f' · const. {p.det_constancia} {p.det_fecha:%d/%m/%Y}' if p.det_constancia else ''),
+            'Activo fijo': 'SÍ' if p.posible_activo else '',
             'Alertas': ' | '.join(p.alertas) if p.alertas else (p.motivo if p.estado in ('excluido', 'duplicado', 'error') else ''),
             'Por qué': p.explicacion}
 
@@ -245,6 +281,12 @@ if filtro == 'Solo con observaciones':
     props = [p for p in props if p.alertas or p.estado == 'revisar']
 elif filtro == 'Solo 🔴/🟡':
     props = [p for p in props if p.semaforo in ('🔴', '🟡')]
+elif filtro == 'Con detracción':
+    props = [p for p in props if p.estado in ('ok', 'revisar') and (p.c.tiene_detraccion or p.det_constancia)]
+elif filtro == 'Posibles activos fijos':
+    props = [p for p in props if p.estado in ('ok', 'revisar') and p.posible_activo]
+elif filtro == 'Dólares':
+    props = [p for p in props if p.estado in ('ok', 'revisar') and p.c.moneda_codigo != 'PEN']
 elif filtro == 'Excluidos':
     props = [p for p in props if p.estado in ('excluido', 'duplicado', 'error')]
 
@@ -259,6 +301,9 @@ else:
             '': st.column_config.TextColumn('', width='small'),
             'Conf.': st.column_config.NumberColumn('Conf. %', width='small'),
             'Total': st.column_config.NumberColumn('Total', format='%.2f'),
+            'TC': st.column_config.NumberColumn('TC', format='%.4f', width='small'),
+            'Detracción': st.column_config.TextColumn('Detracción', width='medium'),
+            'Activo fijo': st.column_config.TextColumn('Activo', width='small'),
             'Cuenta': st.column_config.TextColumn('Cuenta ✏️', help='Escriba la cuenta correcta; el sistema la recordará para este proveedor.'),
             'Alertas': st.column_config.TextColumn('Alertas', width='large'),
             'Por qué': st.column_config.TextColumn('Por qué', width='large'),

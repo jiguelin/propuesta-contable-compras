@@ -48,6 +48,9 @@ class Propuesta:
     alertas: list[str] = field(default_factory=list)
     glosa: str = ''
     explicacion: str = ''
+    posible_activo: bool = False
+    det_constancia: str = ''
+    det_fecha: object = None
 
     @property
     def semaforo(self) -> str:
@@ -71,6 +74,8 @@ class Contexto:
     excluir_bancos: bool = True
     ia: callable = None                        # (Propuesta, Contexto) -> (cuenta, confianza, razon) | None
     umbral_ia: int = 90                        # si confianza < umbral y hay IA, se consulta
+    umbral_activo: float = 1800                # sospecha de activo fijo desde este importe (incl. IGV)
+    periodo: str = ''                          # 'YYYY-MM'; si se indica, lo que no sea de ese mes se excluye
 
 
 # --------------------------------------------------------------------------------------
@@ -217,6 +222,9 @@ def procesar_lote(comprobantes: list[Comprobante], ctx: Contexto) -> list[Propue
         if c.tipo_codigo not in TIPOS_COMPRA:
             p.estado, p.motivo = 'excluido', f'No es comprobante de compra ({c.tipo_nombre})'
             continue
+        if ctx.periodo and c.fecha_emision[:7] != ctx.periodo:
+            p.estado, p.motivo = 'excluido', f'Fuera del periodo {ctx.periodo} (emitida el {c.fecha_emision})'
+            continue
         if p.id in vistos:
             p.estado, p.motivo = 'duplicado', 'Mismo RUC + serie-número ya procesado en este lote'
             continue
@@ -322,16 +330,30 @@ def procesar_lote(comprobantes: list[Comprobante], ctx: Contexto) -> list[Propue
             p.cuenta_desc = cu.descripcion if cu else ''
         p.av = pcge.av_por_cuenta(p.cuenta) if p.cuenta else fam['av']
 
-        # ---- tipo de cambio ----
-        if c.moneda_codigo != 'PEN':
-            t, exacto = ctx.tc.buscar(c.fecha_emision) if ctx.tc else (None, False)
-            if t:
-                p.tc, p.tc_exacto = t.venta, exacto
-                if not exacto:
-                    p.alertas.append(f'TC del {t.fecha:%d/%m/%Y} (último publicado antes del {c.fecha_emision[8:10]}/{c.fecha_emision[5:7]}).')
-            else:
-                p.alertas.append(f'Sin tipo de cambio para {c.fecha_emision}: cargue el PDF SUNAT del mes.')
-                p.estado = 'revisar'
+        # ---- tipo de cambio (para TODAS las operaciones, soles y dólares) ----
+        t, exacto = ctx.tc.buscar(c.fecha_emision) if (ctx.tc and c.fecha_emision) else (None, False)
+        if t:
+            p.tc, p.tc_exacto = t.venta, exacto
+            if not exacto and c.moneda_codigo != 'PEN':
+                p.alertas.append(f'TC del {t.fecha:%d/%m/%Y} (último publicado antes del {c.fecha_emision[8:10]}/{c.fecha_emision[5:7]}).')
+        elif c.moneda_codigo != 'PEN':
+            p.alertas.append(f'Sin tipo de cambio para {c.fecha_emision}: cargue el PDF SUNAT del mes.')
+            p.estado = 'revisar'
+        else:
+            p.alertas.append(f'Sin tipo de cambio para {c.fecha_emision} (se pondrá 1.0000). Cargue el PDF SUNAT del mes.')
+
+        # ---- sospecha de activo fijo ----
+        tc_val = p.tc or 1.0
+        for l in c.lineas:
+            imp_linea = float(l.valor_venta + l.igv) * (tc_val if c.moneda_codigo != 'PEN' else 1.0)
+            d = ' ' + l.descripcion.upper() + ' '
+            if imp_linea >= ctx.umbral_activo and any(k in d for k in pcge.KW_ACTIVO_FIJO):
+                p.posible_activo = True
+                p.alertas.append(f'Posible ACTIVO FIJO: "{l.descripcion[:50]}" S/ {imp_linea:,.2f} (≥ S/ {ctx.umbral_activo:,.0f}). Validar cuenta {p.cuenta or ""} y registrar en el módulo de activos.')
+                break
+        if not p.posible_activo and p.cuenta.startswith(('33', '34')):
+            p.posible_activo = True
+            p.alertas.append('Cuenta de activo fijo propuesta: registrar también en el módulo de activos.')
 
         # ---- alertas de negocio ----
         total_pen = float(c.importe_total) * (p.tc or 1.0)

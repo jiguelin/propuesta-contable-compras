@@ -19,6 +19,7 @@ from datetime import datetime
 
 from . import pcge
 from .clasificador import Contexto, Propuesta, procesar_lote, resumen
+from .detracciones import Constancia, cruzar, leer_constancias
 from .excel_newcontasis import generar_excel_importacion, generar_excel_revision
 from .historial import ResumenHistorial, leer_historial_excel
 from .ia import crear_ia
@@ -54,6 +55,9 @@ class Lote:
     alerta_monto: float
     tc_meses: list[str] = field(default_factory=list)
     generado: datetime = field(default_factory=datetime.now)
+    usd_en_soles: bool = True
+    constancias_sin_factura: list = field(default_factory=list)
+    n_constancias: int = 0
 
     @property
     def resumen(self) -> dict:
@@ -63,13 +67,13 @@ class Lote:
         return next((p for p in self.propuestas if p.id == pid), None)
 
     def excel_importacion(self, con_cabecera: bool = False) -> bytes:
-        return generar_excel_importacion(self.propuestas, self.cuenta_haber, con_cabecera=con_cabecera)
+        return generar_excel_importacion(self.propuestas, self.cuenta_haber, con_cabecera=con_cabecera, usd_en_soles=self.usd_en_soles)
 
     def excel_revision(self) -> bytes:
-        return generar_excel_revision(self.propuestas, self.cuenta_haber, self.empresa, self.periodo)
+        return generar_excel_revision(self.propuestas, self.cuenta_haber, self.empresa, self.periodo, usd_en_soles=self.usd_en_soles)
 
     def reporte_txt(self) -> str:
-        return generar_reporte_txt(self.propuestas, self.empresa, self.ruc, self.periodo, self.cuenta_haber, self.alerta_monto, self.tc_meses)
+        return generar_reporte_txt(self.propuestas, self.empresa, self.ruc, self.periodo, self.cuenta_haber, self.alerta_monto, self.tc_meses, self.constancias_sin_factura, self.n_constancias)
 
     def zip_todo(self) -> bytes:
         buf = io.BytesIO()
@@ -110,6 +114,16 @@ class Servicio:
     def cargar_tc_pdf(self, data: bytes) -> int:
         return self.db.guardar_tc(leer_pdf_sunat(data))
 
+    def cargar_tc_varios(self, archivos: list[tuple[str, bytes]]) -> tuple[int, list[str]]:
+        """Varios PDF/Excel de golpe. Devuelve (días agregados, errores)."""
+        n, errores = 0, []
+        for nombre, data in archivos:
+            try:
+                n += self.cargar_tc_pdf(data) if nombre.lower().endswith('.pdf') else self.cargar_tc_tabla(data)
+            except Exception as ex:
+                errores.append(f'{nombre}: {ex}')
+        return n, errores
+
     def cargar_tc_tabla(self, data: bytes) -> int:
         return self.db.guardar_tc(leer_tabla(data))
 
@@ -131,8 +145,20 @@ class Servicio:
         return h
 
     # ---------- procesamiento ----------
+    @staticmethod
+    def meses_en_archivos(archivos: list[tuple[str, bytes]]) -> dict[str, int]:
+        """'YYYY-MM' → cantidad de comprobantes, para elegir el mes a trabajar antes de procesar."""
+        from collections import Counter
+        cnt = Counter()
+        for n, b in extraer_xml(archivos):
+            c = parse_xml_bytes(b, n)
+            if not c.error and c.fecha_emision:
+                cnt[c.fecha_emision[:7]] += 1
+        return dict(sorted(cnt.items()))
+
     def procesar(self, ruc: str, archivos: list[tuple[str, bytes]], cuenta_haber: str | None = None, periodo: str = '',
-                 usar_ia: bool = True, excluir_bancos: bool = True, alerta_monto: float | None = None, umbral_ia: int = 90) -> Lote:
+                 usar_ia: bool = True, excluir_bancos: bool = True, alerta_monto: float | None = None, umbral_ia: int = 90,
+                 constancias: list[tuple[str, bytes]] | None = None, usd_en_soles: bool = True, umbral_activo: float = 1800) -> Lote:
         e = self.db.empresa(ruc) or {'nombre': ruc, 'cuenta_haber': '4212', 'alerta_monto': 20000}
         cuenta_haber = (cuenta_haber or e['cuenta_haber'] or '4212').strip()
         alerta_monto = alerta_monto if alerta_monto is not None else e['alerta_monto']
@@ -142,15 +168,18 @@ class Servicio:
                        excluir_bancos=excluir_bancos, ia=crear_ia(self.api_key) if usar_ia else None, umbral_ia=umbral_ia)
         comps = [parse_xml_bytes(b, n) for n, b in extraer_xml(archivos)]
         comps.sort(key=lambda c: (c.fecha_emision, c.serie_numero))
+        if not periodo:   # mes con más comprobantes
+            from collections import Counter
+            cnt = Counter(c.fecha_emision[:7] for c in comps if c.fecha_emision)
+            periodo = cnt.most_common(1)[0][0] if cnt else datetime.now().strftime('%Y-%m')
+        ctx.periodo = periodo
+        ctx.umbral_activo = umbral_activo
         props = procesar_lote(comps, ctx)
-        if not periodo:
-            fechas = sorted(c.fecha_emision[:7] for c in comps if c.fecha_emision)
-            periodo = fechas[len(fechas) // 2] if fechas else datetime.now().strftime('%Y-%m')
-        for p in props:
-            if p.estado in ('ok', 'revisar') and p.c.fecha_emision and p.c.fecha_emision[:7] != periodo:
-                p.alertas.append(f'Fecha de emisión {p.c.fecha_emision} fuera del periodo {periodo}.')
         lote = Lote(ruc=ruc, empresa=e['nombre'], periodo=periodo, cuenta_haber=cuenta_haber, propuestas=props,
-                    alerta_monto=alerta_monto, tc_meses=ctx.tc.meses_cargados() if ctx.tc else [])
+                    alerta_monto=alerta_monto, tc_meses=ctx.tc.meses_cargados() if ctx.tc else [], usd_en_soles=usd_en_soles)
+        if constancias:
+            lista = leer_constancias(constancias)
+            lote.n_constancias, lote.constancias_sin_factura = cruzar(props, lista)
         r = lote.resumen
         self.db.registrar_lote(ruc, periodo, r['total'], r['ok'], r['excluidos'], r['revisar'], r)
         return lote

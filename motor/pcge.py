@@ -56,7 +56,7 @@ FAMILIAS = [
          kw=('HOSPEDAJE', 'ALOJAMIENTO', 'HOTEL', 'HOSTAL', 'HABITACION', 'HABITACIÓN')),
     dict(prefijo='6314', nombre='Alimentación', av=4,
          kw=('MENU', 'MENÚ', 'ALMUERZO', 'CENA', 'DESAYUNO', 'CONSUMO', 'LOMO SALTADO', 'CEVICHE', 'POLLO A LA BRASA', 'HAMBURGUESA', 'PIZZA', 'CAFE ', 'CAFÉ ', 'SANDWICH', 'SÁNDWICH', 'PLATO', 'POSTRE', 'JUGO ', 'BEBIDA', 'RESTAURANT', 'CATERING', 'BUFFET', 'POR CONSUMO', 'POLLO', 'PARRILLA', 'CARNERO', 'CHICHARRON', 'CHICHARRÓN', 'PAN Y MANTEQUILLA', 'GASEOSA PERSONAL', 'INKA KOLA', 'COCA COLA', 'CHIFA', 'ARROZ CHAUFA', 'TALLARIN', 'TALLARÍN', 'SOPA', 'CALDO', 'PARRILLADA', 'ANTICUCHO', 'KIDS')),
-    dict(prefijo='6315', nombre='Otros gastos de viaje', av=4,
+    dict(prefijo='6315', nombre='Otros gastos de viaje', av=5,
          kw=('VIATICO', 'VIÁTICO', 'GASTOS DE VIAJE', 'PEAJE', 'ESTACIONAMIENTO', 'PARQUEO', 'APARCAMIENTO', 'COBRO TICKET', 'CAT: ', 'NORMAL L', 'LIGERO', 'PESADO')),
     dict(prefijo='6321', nombre='Asesoría administrativa', av=5,
          kw=('ASESORIA ADMINISTRATIVA', 'ASESORÍA ADMINISTRATIVA', 'GESTION ADMINISTRATIVA', 'GESTIÓN ADMINISTRATIVA', 'TRAMITE', 'TRÁMITE', 'GESTORIA', 'GESTORÍA')),
@@ -175,6 +175,14 @@ def motivo_no_gasto(nombre_emisor: str, texto_items: str) -> str | None:
     return None
 
 
+# Palabras que hacen sospechar ACTIVO FIJO cuando el importe es relevante (≥ umbral, por defecto S/ 1,800 ≈ 1/4 UIT)
+KW_ACTIVO_FIJO = ('LAPTOP', 'NOTEBOOK', 'COMPUTADORA', 'PC ', 'CPU', 'DESKTOP', 'ALL IN ONE', 'MACBOOK', 'IMAC', 'IPAD', 'TABLET', 'CELULAR', 'SMARTPHONE',
+                  'IPHONE', 'GALAXY', 'IMPRESORA', 'MULTIFUNCIONAL', 'MONITOR', 'PROYECTOR', 'SERVIDOR', 'TELEVISOR', ' TV ', 'SMART TV', 'CAMARA', 'CÁMARA',
+                  'ESCRITORIO', 'SILLA', 'SILLON', 'SILLÓN', 'MUEBLE', 'ESTANTE', 'ANAQUEL', 'ARCHIVADOR', 'MESA', 'MOSTRADOR', 'VITRINA', 'MODULO', 'MÓDULO',
+                  'AUTO ', 'AUTOMOVIL', 'AUTOMÓVIL', 'CAMIONETA', 'CAMION', 'CAMIÓN', 'MOTO', 'VEHICULO', 'VEHÍCULO', 'MAQUINA', 'MÁQUINA', 'MAQUINARIA',
+                  'EQUIPO', 'AIRE ACONDICIONADO', 'REFRIGERADORA', 'CONGELADORA', 'COMPRESOR', 'GENERADOR', 'TALADRO', 'ESMERIL', 'SOLDADORA', 'HERRAMIENTA ELECTRICA',
+                  'HERRAMIENTA ELÉCTRICA', 'BALANZA', 'CAJA FUERTE', 'SOFTWARE', 'LICENCIA PERPETUA', 'UNIDAD DENTAL', 'AUTOCLAVE', 'RAYOS X', 'ECOGRAFO', 'ECÓGRAFO')
+
 # Familias con IGV que NO da derecho a crédito fiscal (referencia; no bloquea)
 FAMILIAS_ACTIVO = ('33', '34')
 FAMILIAS_EXISTENCIAS = ('60',)
@@ -226,6 +234,6 @@ def av_por_cuenta(cuenta: str) -> int:
         return 1
     if c.startswith(('33', '34')):
         return 2
-    if c.startswith(('631', '6373')):
+    if c.startswith(('6312', '6313', '6314', '6373')):
         return 4
     return 5

@@ -73,7 +73,7 @@ FAMILIAS = [
     dict(prefijo='6327', nombre='Producción (servicios)', av=5,
          kw=('MAQUILA', 'PRODUCCION POR ENCARGO', 'PRODUCCIÓN POR ENCARGO', 'FABRICACION POR ENCARGO', 'FABRICACIÓN POR ENCARGO', 'CONFECCION', 'CONFECCIÓN')),
     dict(prefijo='6329', nombre='Otros servicios de asesoría y consultoría', av=5,
-         kw=('CONSULTORIA', 'CONSULTORÍA', 'ASESORIA', 'ASESORÍA', 'HONORARIO', 'CAPACITACION', 'CAPACITACIÓN', 'CURSO', 'TALLER', 'DIPLOMADO', 'SEMINARIO', 'SOPORTE TECNICO', 'SOPORTE TÉCNICO', 'DESARROLLO WEB', 'DISEÑO WEB', 'PROGRAMACION', 'PROGRAMACIÓN', 'IMPLEMENTACION', 'IMPLEMENTACIÓN', 'SERVICIO PROFESIONAL', 'SERVICIOS PROFESIONALES', 'RECLUTAMIENTO', 'SELECCION DE PERSONAL', 'SELECCIÓN DE PERSONAL', 'SERVICIOS DE COBRANZA', 'CENTRAL DE RIESGO', 'EQUIFAX', 'SENTINEL', 'INFOCORP')),
+         kw=('CONSULTORIA', 'CONSULTORÍA', 'ASESORIA', 'ASESORÍA', 'HONORARIO', 'CAPACITACION', 'CAPACITACIÓN', 'CURSO', 'TALLER', 'DIPLOMADO', 'SEMINARIO', 'SOPORTE TECNICO', 'SOPORTE TÉCNICO', 'DESARROLLO WEB', 'DISEÑO WEB', 'PROGRAMACION', 'PROGRAMACIÓN', 'IMPLEMENTACION', 'IMPLEMENTACIÓN', 'SERVICIO PROFESIONAL', 'SERVICIOS PROFESIONALES', 'RECLUTAMIENTO', 'SELECCION DE PERSONAL', 'SELECCIÓN DE PERSONAL', 'SERVICIOS DE COBRANZA', 'COBRANZA', 'CENTRAL DE RIESGO', 'EQUIFAX', 'SENTINEL', 'INFOCORP', 'COMISION', 'COMISIÓN', 'INTERMEDIACION', 'INTERMEDIACIÓN', 'TERCERIZACION', 'TERCERIZACIÓN')),
     dict(prefijo='6343', nombre='Mantenimiento y reparación — Propiedad, planta y equipo', av=5,
          kw=('MANTENIMIENTO', 'REPARACION', 'REPARACIÓN', 'CALIBRACION', 'CALIBRACIÓN', 'SERVICIO TECNICO', 'SERVICIO TÉCNICO', 'INSTALACION', 'INSTALACIÓN', 'GASFITERIA', 'GASFITERÍA', 'ELECTRICISTA', 'PINTADO', 'MANO DE OBRA', 'LAVADO DE VEHICULO', 'LAVADO DE VEHÍCULO', 'CAMBIO DE ACEITE')),
     dict(prefijo='6352', nombre='Alquiler — Edificaciones / locales', av=5,
@@ -104,14 +104,12 @@ FAMILIAS = [
          kw=('PUBLICACION', 'PUBLICACIÓN', 'AVISO EN DIARIO', 'EDICTO', 'EL PERUANO')),
     dict(prefijo='6373', nombre='Relaciones públicas', av=4,
          kw=('RELACIONES PUBLICAS', 'RELACIONES PÚBLICAS', 'EVENTO', 'AGASAJO', 'REGALO', 'OBSEQUIO', 'CANASTA', 'CELEBRACION', 'CELEBRACIÓN', 'ANIVERSARIO', 'REPRESENTACION', 'REPRESENTACIÓN', 'ATENCION A CLIENTES', 'ATENCIÓN A CLIENTES', 'CAMPEONATO', 'TORNEO', 'COPA ', 'PARTICIPACION EN', 'PARTICIPACIÓN EN', 'INSCRIPCION AL', 'INSCRIPCIÓN AL', 'CONFRATERNIDAD', 'INTEGRACION', 'INTEGRACIÓN')),
-    dict(prefijo='6381', nombre='Servicios de contratistas', av=5,
-         kw=('CONTRATISTA', 'OBRA CIVIL', 'CONSTRUCCION', 'CONSTRUCCIÓN', 'REMODELACION', 'REMODELACIÓN', 'DRYWALL', 'ALBAÑIL')),
+    dict(prefijo='638', nombre='Servicios de contratistas (trabajos encargados a terceros)', av=5,
+         kw=('CONTRATISTA', 'OBRA CIVIL', 'CONSTRUCCION', 'CONSTRUCCIÓN', 'REMODELACION', 'REMODELACIÓN', 'DRYWALL', 'ALBAÑIL', 'SERVICIO DE LIMPIEZA', 'LIMPIEZA', 'PULIDO', 'ACABADO', 'VIGILANCIA', 'SEGURIDAD', 'GUARDIANIA', 'GUARDIANÍA', 'IMPRESION', 'IMPRESIÓN', 'FOTOCOPIA', 'ANILLADO', 'EMPASTADO', 'LAVANDERIA', 'LAVANDERÍA', 'ESTERILIZACION', 'ESTERILIZACIÓN', 'INSTALACION DE', 'INSTALACIÓN DE', 'MONTAJE', 'HABILITADO', 'CORTE Y', 'ACONDICIONAMIENTO')),
     dict(prefijo='6391', nombre='Gastos bancarios', av=5,
          kw=('COMISION BANCARIA', 'COMISIÓN BANCARIA', 'PORTES', 'MANTENIMIENTO DE CUENTA', 'ITF', 'GASTOS BANCARIOS', 'COMISION POR TRANSFERENCIA', 'COMISIÓN POR TRANSFERENCIA', 'COMISION POS', 'COMISIÓN POS', 'NIUBIZ', 'IZIPAY', 'CULQI', 'MERCADO PAGO')),
     dict(prefijo='6392', nombre='Gastos de laboratorio', av=5,
          kw=('LABORATORIO', 'ANALISIS CLINICO', 'ANÁLISIS CLÍNICO', 'ENSAYO DE LABORATORIO', 'PROTESIS', 'PRÓTESIS', 'CORONA DENTAL', 'RADIOGRAFIA', 'RADIOGRAFÍA')),
-    dict(prefijo='639', nombre='Otros servicios prestados por terceros', av=5,
-         kw=('SERVICIO DE LIMPIEZA', 'LIMPIEZA', 'VIGILANCIA', 'SEGURIDAD', 'GUARDIANIA', 'GUARDIANÍA', 'SERVICIO DE ', 'SERVICIOS DE ', 'IMPRESION', 'IMPRESIÓN', 'FOTOCOPIA', 'ANILLADO', 'LAVANDERIA', 'LAVANDERÍA', 'ESTERILIZACION', 'ESTERILIZACIÓN', 'COMISION', 'COMISIÓN', 'INTERMEDIACION', 'INTERMEDIACIÓN', 'TERCERIZACION', 'TERCERIZACIÓN')),
 
     # ---------- 65 OTROS GASTOS DE GESTIÓN ----------
     dict(prefijo='651', nombre='Seguros', av=5,
@@ -183,6 +181,14 @@ KW_ACTIVO_FIJO = ('LAPTOP', 'NOTEBOOK', 'COMPUTADORA', 'PC ', 'CPU', 'DESKTOP', 
                   'EQUIPO', 'AIRE ACONDICIONADO', 'REFRIGERADORA', 'CONGELADORA', 'COMPRESOR', 'GENERADOR', 'TALADRO', 'ESMERIL', 'SOLDADORA', 'HERRAMIENTA ELECTRICA',
                   'HERRAMIENTA ELÉCTRICA', 'BALANZA', 'CAJA FUERTE', 'SOFTWARE', 'LICENCIA PERPETUA', 'UNIDAD DENTAL', 'AUTOCLAVE', 'RAYOS X', 'ECOGRAFO', 'ECÓGRAFO')
 
+# Subcuentas del PCGE 2019 que NO tienen divisionaria genérica: si el plan de la empresa inventó una,
+# SUNAT la rechaza en el balance de comprobación. El bloqueo efectivo vive en motor/reglas.py
+# (REGLAS_SISTEMA) para que se pueda ampliar desde la app sin tocar el código.
+DIVISIONARIAS_VALIDAS = {
+    '639': ('6391', '6392'),   # solo gastos bancarios y gastos de laboratorio
+}
+
+
 # Familias con IGV que NO da derecho a crédito fiscal (referencia; no bloquea)
 FAMILIAS_ACTIVO = ('33', '34')
 FAMILIAS_EXISTENCIAS = ('60',)
@@ -203,13 +209,19 @@ SUFIJOS_DESTINO = {'093': 'Costo del servicio (CDS)', '094': 'Administración (A
 
 
 def familias_por_texto(texto: str) -> list[tuple[dict, int]]:
-    """Devuelve [(familia, puntaje)] ordenadas por puntaje (cantidad de palabras clave que aparecen)."""
+    """Devuelve [(familia, puntaje)] ordenadas por especificidad.
+
+    El puntaje pondera la longitud de la palabra clave encontrada: una coincidencia con
+    "COMISION POR TRANSFERENCIA" (gastos bancarios) pesa más que una con "COMISION" a secas,
+    y "SERVICIO DE LIMPIEZA" más que "LIMPIEZA". Así gana siempre la familia más específica.
+    """
     t = ' ' + (texto or '').upper() + ' '
     hits = []
     for fam in FAMILIAS:
-        n = sum(1 for k in fam['kw'] if k in t)
-        if n:
-            hits.append((fam, n))
+        encontradas = [k for k in fam['kw'] if k in t]
+        if encontradas:
+            puntaje = sum(len(k.strip()) for k in encontradas) + 3 * (len(encontradas) - 1)
+            hits.append((fam, puntaje))
     hits.sort(key=lambda x: -x[1])
     return hits
 

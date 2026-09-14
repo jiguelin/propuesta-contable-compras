@@ -114,3 +114,40 @@ def test_periodo_constancias_activo_y_usd(tmp_path):
     import openpyxl, io
     ws = openpyxl.load_workbook(io.BytesIO(lote3.excel_importacion())).active
     assert ws.max_row == 1 and ws['H1'].value == '20100000002' and ws['W1'].value == 3.52
+
+
+def test_glosa_limpia_para_ple():
+    from motor.texto import normalizar
+    danada = 'COMPRA ACTUALIZACI\u00c3\u00af\u00c2\u00bf\u00c2\u00bdN DEL SISTEMA DE GESTI\u00c3\u00af\u00c2\u00bf\u00c2\u00bdN'
+    limpia, perdida = normalizar(danada)
+    assert limpia == 'COMPRA ACTUALIZACION DEL SISTEMA DE GESTION' and perdida
+    assert normalizar('COMPRA DE A\u00d1O NUEVO / DISE\u00d1O GR\u00c1FICO')[0] == 'COMPRA DE ANO NUEVO / DISENO GRAFICO'
+    assert normalizar('COMISI\u00c3\u00b3N POR TRANSFERENCIA')[0] == 'COMISION POR TRANSFERENCIA'
+    # nada fuera del juego de caracteres seguro para el PLE
+    assert all(ch in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 .,-/()#%+&:'\"\u00b0\u00ba\u00aa" for ch in limpia)
+
+
+def test_bloqueo_6399_y_regla_manda(tmp_path):
+    import io
+    from motor.reglas import Regla
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    for cod, desc in [('4212', 'EMITIDAS'), ('6399094', 'OTROS SERVICIOS - ADM'), ('6381094', 'CONTRATISTAS - ADM'), ('60919', 'OTROS COSTOS')]:
+        ws.append([cod, desc])
+    buf = io.BytesIO()
+    wb.save(buf)
+    s = Servicio(ruta_db=tmp_path / 'p.db')
+    s.registrar_empresa('20999999999', 'JOYAS SAC', buf.getvalue())
+    xml = (DATOS / '20100000002-01-F001-000777.xml').read_text(encoding='utf-8').replace('LAPTOP LENOVO THINKPAD 16GB', 'LIMPIEZA DE 15 ARETES DE PLATA')
+    lote = s.procesar('20999999999', [('a.xml', xml.encode())], cuenta_haber='4212', usar_ia=False)
+    p = lote.propuestas[0]
+    assert not p.cuenta.startswith('6399') and p.cuenta == '6381094'      # nunca 6399, aunque esté en el plan
+    s.guardar_regla(Regla(ruc='20999999999', tipo='cuenta', nombre='Acondicionamiento = costo (NIC 2)',
+                          palabras='LIMPIEZA,PULIDO', cuenta='60919', nota='NIC 2'))
+    p = s.procesar('20999999999', [('a.xml', xml.encode())], cuenta_haber='4212', usar_ia=False).propuestas[0]
+    assert p.cuenta == '60919' and p.fuente == 'regla' and p.confianza == 97   # la regla manda
+    # corrección manual a una cuenta bloqueada: se respeta, se avisa, pero no se aprende
+    lote2 = s.procesar('20999999999', [('a.xml', xml.encode())], cuenta_haber='4212', usar_ia=False)
+    s.aplicar_correccion(lote2, lote2.propuestas[0].id, '6399094')
+    assert any('bloqueada' in a for a in lote2.propuestas[0].alertas)
+    assert s.db.memoria_completa('20999999999') == []

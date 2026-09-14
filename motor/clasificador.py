@@ -5,10 +5,12 @@ motor/clasificador.py — Motor de contabilización de compras.
 Capas (en este orden, la IA al final y solo si hay duda):
   1. Exclusiones: bancos (RUC conocido o tipo 30), documentos que no son comprobantes de compra, duplicados.
   2. Concepto de la factura: familia PCGE dominante por IMPORTE de los ítems (no por número de líneas).
-  3. Memoria de la empresa: proveedor + concepto → cuenta aprendida (correcciones anteriores / historial).
-  4. Plan de cuentas de la empresa: cuentas candidatas reales bajo la familia PCGE (preferimos las que
+  3. Base de conocimiento contable (motor/reglas.py): reglas escritas por el contador. Mandan sobre todo,
+     incluida la costumbre de la empresa. También bloquean cuentas que SUNAT no acepta (p. ej. 6399).
+  4. Memoria de la empresa: proveedor + concepto → cuenta aprendida (correcciones anteriores / historial).
+  5. Plan de cuentas de la empresa: cuentas candidatas reales bajo la familia PCGE (preferimos las que
      el historial muestra que la empresa usa).
-  5. IA (opcional): solo elige entre las candidatas existentes. Nunca inventa una cuenta.
+  6. IA (opcional): solo elige entre las candidatas existentes. Nunca inventa una cuenta.
 """
 from __future__ import annotations
 
@@ -17,7 +19,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 
-from . import pcge
+from . import pcge, reglas as kb
+from .texto import normalizar
 from .plan_cuentas import Cuenta, PlanCuentas
 from .tipo_cambio import HistorialTC
 from .xml_parser import (Comprobante, RUCS_BANCOS, RUCS_COMBUSTIBLE, RUCS_RESTAURANTES, RUCS_SEGUROS,
@@ -47,7 +50,9 @@ class Propuesta:
     tc_exacto: bool = True
     alertas: list[str] = field(default_factory=list)
     glosa: str = ''
+    glosa_revisar: bool = False     # la glosa venía con caracteres ilegibles y hubo que reconstruirla
     explicacion: str = ''
+    regla: str = ''                 # nombre de la regla de la base de conocimiento que decidió la cuenta
     posible_activo: bool = False
     det_constancia: str = ''
     det_fecha: object = None
@@ -76,6 +81,8 @@ class Contexto:
     ia: callable = None                        # (Propuesta, Contexto) -> (cuenta, confianza, razon) | None
     umbral_ia: int = 90                        # si confianza < umbral y hay IA, se consulta
     umbral_activo: float = 1800                # sospecha de activo fijo desde este importe (incl. IGV)
+    reglas: list = field(default_factory=list)  # base de conocimiento contable (reglas + bloqueos)
+    glosa_ascii: bool = True                   # glosa solo con caracteres A-Z (compatible con el PLE)
     periodo: str = ''                          # 'YYYY-MM'; si se indica, lo que no sea de ese mes se excluye
 
 
@@ -102,7 +109,7 @@ def _familia_defecto(c: Comprobante, ctx: Contexto) -> tuple[dict, str]:
     unidades = {l.unidad for l in c.lineas}
     es_servicio = bool(c.lineas) and unidades <= {'SERVICIO', ''} or c.tiene_detraccion
     if es_servicio:
-        pref = '639'
+        pref = '6329'
         txt = 'ítems con unidad SERVICIO (ZZ)' + (' y detracción' if c.tiene_detraccion else '')
     else:
         pref = '656'
@@ -156,15 +163,34 @@ def determinar_concepto(c: Comprobante, ctx: Contexto) -> tuple[dict, list[tuple
 # 4. Candidatas del plan de la empresa
 # --------------------------------------------------------------------------------------
 def candidatas_para(prefijo: str, ctx: Contexto) -> list[Cuenta]:
+    """Cuentas del plan bajo esa familia, quitando siempre las bloqueadas por la base de reglas."""
     if not ctx.plan:
         return []
     p = prefijo
     while len(p) >= 2:
-        cand = ctx.plan.con_prefijo(p)
+        cand = kb.filtrar_cuentas(ctx.plan.con_prefijo(p), ctx.reglas)
         if cand:
             return cand
         p = p[:-1]
     return []
+
+
+def _cuenta_por_regla(regla, ctx: Contexto, texto: str):
+    """Resuelve la cuenta concreta que indica una regla: exacta, o la mejor del plan bajo ese prefijo."""
+    if not regla.es_prefijo:
+        cu = ctx.plan.get(regla.cuenta_limpia) if ctx.plan else None
+        if cu:
+            return cu.codigo, cu.descripcion, ''
+        if not ctx.plan:
+            return regla.cuenta_limpia, '', ''
+        return '', '', f'la regla apunta a {regla.cuenta_limpia}, que no existe en el plan de la empresa'
+    cands = candidatas_para(regla.cuenta_limpia, ctx)
+    if not cands:
+        if not ctx.plan:
+            return regla.cuenta_limpia, '', ''
+        return '', '', f'la regla apunta a {regla.cuenta_limpia}*, y el plan no tiene ninguna cuenta utilizable ahí'
+    cu, _ = elegir_candidata(cands, ctx, pcge.familia_por_prefijo(regla.cuenta_limpia), texto)
+    return (cu.codigo, cu.descripcion, '') if cu else ('', '', 'sin candidata')
 
 
 def _puntaje_candidata(cu: Cuenta, ctx: Contexto, fam: dict | None = None, texto: str = '') -> tuple:
@@ -231,7 +257,10 @@ def procesar_lote(comprobantes: list[Comprobante], ctx: Contexto) -> list[Propue
             continue
         vistos.add(p.id)
 
-        p.glosa = _glosa(c)
+        p.glosa, p.glosa_revisar = normalizar(_glosa(c), ctx.glosa_ascii, 60)
+        if p.glosa_revisar:
+            p.alertas.append('La glosa del XML traía caracteres ilegibles (tildes/ñ dañadas por el emisor). '
+                             'Se reconstruyó para que el PLE la acepte: revísela y corríjala en la tabla si hace falta.')
         no_gasto = pcge.motivo_no_gasto(c.nombre_emisor, texto_items(c))
         if no_gasto:
             p.estado, p.confianza = 'revisar', 0
@@ -247,12 +276,32 @@ def procesar_lote(comprobantes: list[Comprobante], ctx: Contexto) -> list[Propue
             det = ' / '.join(f'{pcge.familia_por_prefijo(pr)["nombre"] if pcge.familia_por_prefijo(pr) else pr} {pc:.0f}%' for pr, pc in mezcla[:3])
             p.alertas.append(f'Factura mixta: {det}. Se usa una sola cuenta (la de mayor importe).')
 
-        # ---- 3. memoria proveedor + concepto ----
+        # ---- 3. base de conocimiento contable (manda sobre la costumbre de la empresa) ----
+        texto_completo = f'{c.nombre_emisor} {texto_items(c)}'
+        regla = kb.aplicar(texto_completo, c.ruc_emisor, ctx.reglas)
+        if regla:
+            cod, desc, problema = _cuenta_por_regla(regla, ctx, texto_items(c))
+            if cod:
+                p.cuenta, p.cuenta_desc, p.fuente, p.regla = cod, desc, 'regla', regla.nombre
+                p.confianza = 97
+                p.explicacion = f'Regla contable "{regla.nombre}" → {cod}. {expl}.'
+                if regla.nota:
+                    p.explicacion += f' ({regla.nota[:120]})'
+                f2 = pcge.familia_por_prefijo(cod)
+                if f2:
+                    p.familia, p.familia_nombre, p.concepto = f2['prefijo'], f2['nombre'], f2['prefijo']
+            else:
+                p.alertas.append(f'La regla "{regla.nombre}" coincide pero no se pudo aplicar: {problema}.')
+
+        # ---- 4. memoria proveedor + concepto ----
         memo = ctx.memoria_proveedor(c.ruc_emisor) if ctx.memoria_proveedor else []
+        memo = [m for m in memo if not kb.cuenta_bloqueada(m['cuenta'], ctx.reglas)]
         memo_ok = [m for m in memo if m['concepto'] == p.concepto and (not ctx.plan or ctx.plan.existe(m['cuenta']))]
         memo_otro = [m for m in memo if m['concepto'] != p.concepto and (not ctx.plan or ctx.plan.existe(m['cuenta']))]
 
-        if memo_ok:
+        if p.fuente == 'regla':
+            pass
+        elif memo_ok:
             m = memo_ok[0]
             p.cuenta, p.fuente = m['cuenta'], 'memoria'
             p.confianza = min(99, 92 + min(m['veces'], 7))
@@ -267,7 +316,7 @@ def procesar_lote(comprobantes: list[Comprobante], ctx: Contexto) -> list[Propue
             if f2:
                 p.familia, p.familia_nombre, p.concepto = f2['prefijo'], f2['nombre'], f2['prefijo']
         else:
-            # ---- 4. plan de cuentas ----
+            # ---- 5. plan de cuentas ----
             p.candidatas = candidatas_para(p.familia, ctx)
             cu, razon = elegir_candidata(p.candidatas, ctx, pcge.familia_por_prefijo(p.familia), texto_items(c))
             # La práctica de la empresa manda sobre la teoría: si a este proveedor ya se le contabilizó varias veces
@@ -306,8 +355,8 @@ def procesar_lote(comprobantes: list[Comprobante], ctx: Contexto) -> list[Propue
                 p.cuenta, p.fuente, p.confianza = p.familia, 'defecto', 40
                 p.explicacion = f'{expl}. Sin plan de cuentas cargado: se propone la familia PCGE {p.familia}.'
 
-        # ---- 5. IA solo si hay duda ----
-        if ctx.ia and p.confianza < ctx.umbral_ia and p.estado != 'revisar':
+        # ---- 6. IA solo si hay duda ----
+        if ctx.ia and p.fuente != 'regla' and p.confianza < ctx.umbral_ia and p.estado != 'revisar':
             try:
                 res = ctx.ia(p, ctx)
             except Exception as ex:   # la IA nunca rompe el flujo
@@ -315,7 +364,7 @@ def procesar_lote(comprobantes: list[Comprobante], ctx: Contexto) -> list[Propue
                 p.alertas.append(f'IA no disponible: {str(ex)[:80]}')
             if res:
                 cuenta_ia, conf_ia, razon_ia = res
-                if cuenta_ia and (not ctx.plan or ctx.plan.existe(cuenta_ia)):
+                if cuenta_ia and not kb.cuenta_bloqueada(cuenta_ia, ctx.reglas) and (not ctx.plan or ctx.plan.existe(cuenta_ia)):
                     if cuenta_ia != p.cuenta:
                         p.explicacion += f' IA: {razon_ia} (reglas proponían {p.cuenta}).'
                     else:
@@ -325,6 +374,26 @@ def procesar_lote(comprobantes: list[Comprobante], ctx: Contexto) -> list[Propue
                     f2 = pcge.familia_por_prefijo(cuenta_ia)
                     if f2:
                         p.familia, p.familia_nombre, p.concepto = f2['prefijo'], f2['nombre'], f2['prefijo']
+
+        # red de seguridad: pase lo que pase, una cuenta bloqueada nunca sale en la propuesta
+        bloqueo = kb.cuenta_bloqueada(p.cuenta, ctx.reglas)
+        if bloqueo:
+            alternativa = ''
+            for pref in bloqueo.lista_alternativas:
+                cands = candidatas_para(pref, ctx)
+                if cands:
+                    cu2, _ = elegir_candidata(cands, ctx, pcge.familia_por_prefijo(pref), texto_items(c))
+                    if cu2:
+                        alternativa = cu2.codigo
+                        break
+            p.alertas.append(f'La cuenta {p.cuenta} está bloqueada: {bloqueo.nombre}. {bloqueo.nota[:200]}')
+            if alternativa:
+                p.explicacion += f' Se reemplazó {p.cuenta} por {alternativa} (cuenta bloqueada).'
+                p.cuenta, p.fuente = alternativa, 'regla'
+                p.confianza = min(p.confianza, 80)
+            else:
+                p.explicacion += f' {p.cuenta} está bloqueada y el plan no tiene alternativa: asigne la cuenta a mano.'
+                p.cuenta, p.confianza, p.estado = '', 0, 'revisar'
 
         if ctx.plan and p.cuenta:
             cu = ctx.plan.get(p.cuenta)

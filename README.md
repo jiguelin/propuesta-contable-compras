@@ -97,6 +97,23 @@ Sin API key la app funciona igual (solo reglas + plan + memoria).
 - Constancias: varios archivos y varios meses a la vez (TXT/CSV/Excel/PDF/ZIP mezclados).
 - Columna W: si no hay TC cargado para la fecha, queda en blanco (antes ponía 1.0000 en soles) y la app avisa en rojo si falta el TC del mes elegido.
 
+## Novedades v0.3.0
+
+- **Glosa compatible con el PLE** (`motor/texto.py`). Repara el texto dañado que llega en muchos XML
+  (`GESTIÃ¯Â¿Â½N` → `GESTION`), reconstruye los caracteres perdidos con patrones del castellano
+  (`CI�N`→`CION`, `A�O`→`ANO`), quita tildes y ñ y deja solo A-Z, números y puntuación básica.
+  Lo que tuvo que adivinar se marca: filtro "Glosa reparada" y **la glosa es editable en la tabla**.
+  La razón social (columna I) recibe el mismo tratamiento.
+- **Base de conocimiento contable** (`motor/reglas.py`), editable desde la app y con prioridad **sobre**
+  el historial de la empresa. Dos tipos de regla: *usar esta cuenta* cuando aparezcan ciertas palabras
+  (o cierto proveedor), y *bloquear esta cuenta*. Las reglas se guardan por empresa o para todas.
+- **La 6399 nunca se propone** (regla de sistema). El PCGE 2019 solo reconoce 6391 (gastos bancarios) y
+  6392 (gastos de laboratorio) dentro de 639, y SUNAT rechaza el resto en el balance de comprobación.
+  Si el plan de la empresa la tiene, el motor la ignora y usa una alternativa (638, 633, 6329 o 60919);
+  si usted la escribe a mano se respeta, pero con alerta y sin guardarla en la memoria.
+  El reparto de familias se corrigió en consecuencia: 638 servicios de contratistas, 6329 intermediación/comisiones.
+- Las palabras clave ahora puntúan por especificidad: "COMISION POR TRANSFERENCIA" (6391) le gana a "COMISION" (6329).
+
 ## Hoja de ruta
 
 - **v0.1 (esta)**: flujo completo XML → Excel + reporte, memoria por proveedor+concepto, TC, detracción, IA opcional.

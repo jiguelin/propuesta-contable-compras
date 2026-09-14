@@ -15,6 +15,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 from .plan_cuentas import PlanCuentas
+from .reglas import REGLAS_SISTEMA, Regla
 from .tipo_cambio import TC, HistorialTC
 
 SCHEMA = """
@@ -31,6 +32,10 @@ CREATE TABLE IF NOT EXISTS aprendizaje (
     origen TEXT, ultima TEXT, PRIMARY KEY (ruc, ruc_proveedor, concepto, cuenta));
 CREATE TABLE IF NOT EXISTS historial_stats (
     ruc TEXT, cuenta TEXT, veces INTEGER, descripcion TEXT, PRIMARY KEY (ruc, cuenta));
+CREATE TABLE IF NOT EXISTS reglas (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, ruc TEXT DEFAULT '*', tipo TEXT DEFAULT 'cuenta', nombre TEXT,
+    palabras TEXT, ruc_proveedor TEXT, cuenta TEXT, alternativas TEXT, nota TEXT,
+    prioridad INTEGER DEFAULT 100, activa INTEGER DEFAULT 1, creado TEXT);
 CREATE TABLE IF NOT EXISTS lotes (
     id INTEGER PRIMARY KEY AUTOINCREMENT, ruc TEXT, periodo TEXT, fecha TEXT, n_xml INTEGER,
     n_ok INTEGER, n_excluidos INTEGER, n_revisar INTEGER, resumen TEXT);
@@ -134,6 +139,34 @@ class Memoria:
 
     def historial_stats(self, ruc: str) -> dict[str, int]:
         return {r['cuenta']: r['veces'] for r in self.cx.execute('SELECT cuenta,veces FROM historial_stats WHERE ruc=?', (ruc,))}
+
+    # ---------------- reglas (base de conocimiento contable) ----------------
+    def reglas(self, ruc: str | None = None, incluir_sistema: bool = True) -> list[Regla]:
+        """Reglas de sistema + globales ('*') + las de esta empresa, ordenadas por prioridad."""
+        q = "SELECT * FROM reglas WHERE ruc='*'" + (' OR ruc=?' if ruc else '')
+        filas = [dict(r) for r in self.cx.execute(q, (ruc,) if ruc else ())]
+        propias = [Regla(**{k: v for k, v in f.items() if k != 'creado'}) for f in filas]
+        todas = (list(REGLAS_SISTEMA) if incluir_sistema else []) + propias
+        return sorted(todas, key=lambda r: (r.prioridad, r.id))
+
+    def guardar_regla(self, r: Regla) -> int:
+        if r.id and r.id > 0:
+            self.cx.execute('''UPDATE reglas SET ruc=?, tipo=?, nombre=?, palabras=?, ruc_proveedor=?, cuenta=?,
+                               alternativas=?, nota=?, prioridad=?, activa=? WHERE id=?''',
+                            (r.ruc, r.tipo, r.nombre, r.palabras, r.ruc_proveedor, r.cuenta,
+                             r.alternativas, r.nota, r.prioridad, r.activa, r.id))
+            self.cx.commit()
+            return r.id
+        cur = self.cx.execute('''INSERT INTO reglas(ruc,tipo,nombre,palabras,ruc_proveedor,cuenta,alternativas,nota,prioridad,activa,creado)
+                                 VALUES(?,?,?,?,?,?,?,?,?,?,?)''',
+                              (r.ruc, r.tipo, r.nombre, r.palabras, r.ruc_proveedor, r.cuenta,
+                               r.alternativas, r.nota, r.prioridad, r.activa, datetime.now().isoformat(timespec='seconds')))
+        self.cx.commit()
+        return cur.lastrowid
+
+    def eliminar_regla(self, id_regla: int):
+        self.cx.execute('DELETE FROM reglas WHERE id=?', (id_regla,))
+        self.cx.commit()
 
     # ---------------- lotes ----------------
     def registrar_lote(self, ruc: str, periodo: str, n_xml: int, n_ok: int, n_excluidos: int, n_revisar: int, resumen: dict | None = None):

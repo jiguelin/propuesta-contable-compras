@@ -60,6 +60,7 @@ class ResumenHistorial:
     frecuencia_cuentas: Counter = field(default_factory=Counter)      # cuenta gasto → veces
     frecuencia_haber: Counter = field(default_factory=Counter)        # 4212/1011 → veces
     descripciones: dict = field(default_factory=dict)                 # cuenta → descripción
+    cuentas_bloqueadas: list = field(default_factory=list)
     por_proveedor: dict = field(default_factory=dict)                 # ruc → Counter(cuenta) (solo formato 2)
 
     @property

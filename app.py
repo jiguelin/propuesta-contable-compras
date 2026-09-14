@@ -15,6 +15,7 @@ import pandas as pd
 import streamlit as st
 
 from motor import __version__
+from motor.reglas import Regla
 from motor.servicio import Servicio
 
 st.set_page_config(page_title='Propuesta Contable de Compras', page_icon='📊', layout='wide')
@@ -124,6 +125,45 @@ with st.sidebar:
                 except Exception as ex:
                     st.error(str(ex))
 
+        st.markdown('<div class="paso">Reglas contables</div>', unsafe_allow_html=True)
+        _reglas = S.reglas(ruc)
+        _propias = [r for r in _reglas if not r.sistema]
+        st.caption(f'{len(_reglas)} reglas activas ({len(_propias)} suyas + {len(_reglas) - len(_propias)} de sistema). '
+                   'Mandan sobre el historial de la empresa.')
+        with st.expander('Ver y agregar reglas'):
+            for r in _reglas:
+                etiqueta = '🔒' if r.tipo == 'bloqueo' else '📘'
+                ambito = 'todas las empresas' if r.ruc == '*' else 'esta empresa'
+                st.markdown(f"{etiqueta} **{r.nombre}** — `{r.cuenta}` · {ambito}")
+                if r.palabras:
+                    st.caption(f'Cuando aparezca: {r.palabras}' + (f' · proveedor {r.ruc_proveedor}' if r.ruc_proveedor else ''))
+                if r.nota:
+                    st.caption(r.nota[:300])
+                if not r.sistema and st.button('Eliminar', key=f'delregla_{r.id}'):
+                    S.eliminar_regla(r.id)
+                    st.rerun()
+                st.markdown('---')
+            with st.form('nueva_regla'):
+                st.caption('Nueva regla')
+                r_tipo = st.selectbox('Tipo', ['Usar esta cuenta', 'Bloquear esta cuenta'])
+                r_nombre = st.text_input('Nombre', placeholder='ej. Acondicionamiento de joyas = costo (NIC 2)')
+                r_palabras = st.text_input('Palabras clave (separadas por coma)', placeholder='LIMPIEZA, PULIDO, BAÑO DE RODIO')
+                r_prov = st.text_input('Solo para el RUC de proveedor (opcional)', max_chars=11)
+                r_cuenta = st.text_input('Cuenta', placeholder='60919  ·  o 638* para "la mejor bajo 638"')
+                r_nota = st.text_area('Fundamento (por qué)', placeholder='NIC 2: el acondicionamiento para dejar la mercadería lista para la venta es costo.')
+                r_global = st.checkbox('Aplicar a todas las empresas', value=False)
+                if st.form_submit_button('Guardar regla', type='primary'):
+                    try:
+                        S.guardar_regla(Regla(ruc='*' if r_global else ruc,
+                                              tipo='cuenta' if r_tipo.startswith('Usar') else 'bloqueo',
+                                              nombre=r_nombre.strip() or 'Regla sin nombre', palabras=r_palabras.strip(),
+                                              ruc_proveedor=r_prov.strip(), cuenta=r_cuenta.strip(), nota=r_nota.strip(),
+                                              prioridad=50 if not r_global else 60))
+                        st.success('Regla guardada.')
+                        st.rerun()
+                    except Exception as ex:
+                        st.error(str(ex))
+
         st.markdown('<div class="paso">Memoria aprendida</div>', unsafe_allow_html=True)
         st.caption(f'{len(memoria)} reglas proveedor + concepto → cuenta')
         if memoria and st.button('Ver / limpiar memoria'):
@@ -201,6 +241,9 @@ with c3:
     st.markdown('<div class="paso">Opciones</div>', unsafe_allow_html=True)
     excluir_bancos = st.checkbox('Excluir comprobantes bancarios', value=True)
     usar_ia = st.checkbox('Usar IA en casos dudosos', value=bool(api_key()), disabled=not api_key())
+    glosa_ascii = st.checkbox('Glosa sin tildes ni ñ (compatible con el PLE)', value=True,
+                              help='Repara los caracteres dañados del XML (GESTIÃ¯Â¿Â½N → GESTION) y deja solo A-Z, '
+                                   'números y puntuación básica, que es lo que acepta el PLE de SUNAT sin problemas.')
     umbral_activo = st.number_input('Sospechar activo fijo desde S/', min_value=0.0, value=1800.0, step=100.0,
                                     help='Compras de equipos, muebles, vehículos, software, etc. con importe (incl. IGV) igual o mayor se marcan como posible activo fijo.')
 
@@ -235,7 +278,7 @@ if st.button('GENERAR PROPUESTA', type='primary', disabled=not archivos, use_con
             ss.lote = S.procesar(ruc, [(f.name, f.getvalue()) for f in archivos], cuenta_haber=cuenta_haber, periodo=periodo,
                                  usar_ia=usar_ia, excluir_bancos=excluir_bancos, alerta_monto=alerta_monto, umbral_activo=umbral_activo,
                                  constancias=[(f.name, f.getvalue()) for f in (constancias_up or [])] or None,
-                                 excluir_detraccion_sin_constancia=excluir_det)
+                                 excluir_detraccion_sin_constancia=excluir_det, glosa_ascii=glosa_ascii)
             ss.confirmado = False
         except Exception as ex:
             st.error(f'No se pudo procesar: {ex}')
@@ -259,6 +302,10 @@ m[3].metric('🟡 Revisar rápido', r['amarillo'])
 m[4].metric('🔴 Revisión obligatoria', r['rojo'])
 m[5].metric('Excluidos / dup.', r['excluidos'] + r['duplicados'] + r['errores'])
 m[6].metric('Con detracción', n_det, help=f'{sum(1 for p in lote.propuestas if p.det_constancia)} con constancia cruzada · {n_det_exc} excluidas por falta de constancia')
+n_glosa = sum(1 for p in lote.propuestas if p.glosa_revisar)
+if n_glosa:
+    st.info(f'{n_glosa} glosa(s) venían con caracteres dañados en el XML y se reconstruyeron para el PLE. '
+            'Están en el filtro "Glosa reparada"; puede corregirlas a mano en la columna Glosa.')
 if n_det_exc:
     st.warning(f'{n_det_exc} factura(s) con detracción quedaron FUERA del Excel por no tener constancia de depósito. Están en el filtro "Con detracción" y en la hoja EXCLUIDOS; cuando se pague la detracción, vuelva a generar con la constancia.')
 m[7].metric('Posible activo fijo', n_act)
@@ -268,7 +315,7 @@ if lote.constancias_sin_factura:
 
 st.markdown('<div class="paso">Revise y corrija la cuenta directamente en la tabla (doble clic en la celda "Cuenta")</div>', unsafe_allow_html=True)
 
-filtro = st.radio('Mostrar', ['Todos', 'Solo con observaciones', 'Solo 🔴/🟡', 'Con detracción', 'Posibles activos fijos', 'Dólares', 'Excluidos'], horizontal=True, label_visibility='collapsed')
+filtro = st.radio('Mostrar', ['Todos', 'Solo con observaciones', 'Solo 🔴/🟡', 'Con detracción', 'Posibles activos fijos', 'Glosa reparada', 'Dólares', 'Excluidos'], horizontal=True, label_visibility='collapsed')
 
 
 def _fila(p):
@@ -279,6 +326,7 @@ def _fila(p):
             'TC': p.tc or None, 'Cuenta': p.cuenta, 'Cuenta (descripción)': p.cuenta_desc[:45], 'Fuente': p.fuente,
             'Detracción': (f'{p.c.detraccion_porcentaje}% S/ {p.c.detraccion_monto}' if p.c.tiene_detraccion else '') + (f' · const. {p.det_constancia} {p.det_fecha:%d/%m/%Y}' if p.det_constancia else ''),
             'Activo fijo': 'SÍ' if p.posible_activo else '',
+            'Glosa': p.glosa, 'Regla': p.regla,
             'Alertas': ' | '.join(p.alertas) if p.alertas else (p.motivo if p.estado in ('excluido', 'duplicado', 'error') else ''),
             'Por qué': p.explicacion}
 
@@ -292,6 +340,8 @@ elif filtro == 'Con detracción':
     props = [p for p in props if p.c.tiene_detraccion or p.det_constancia]
 elif filtro == 'Posibles activos fijos':
     props = [p for p in props if p.estado in ('ok', 'revisar') and p.posible_activo]
+elif filtro == 'Glosa reparada':
+    props = [p for p in props if p.glosa_revisar]
 elif filtro == 'Dólares':
     props = [p for p in props if p.estado in ('ok', 'revisar') and p.c.moneda_codigo != 'PEN']
 elif filtro == 'Excluidos':
@@ -312,22 +362,33 @@ else:
             'Detracción': st.column_config.TextColumn('Detracción', width='medium'),
             'Activo fijo': st.column_config.TextColumn('Activo', width='small'),
             'Cuenta': st.column_config.TextColumn('Cuenta ✏️', help='Escriba la cuenta correcta; el sistema la recordará para este proveedor.'),
+            'Glosa': st.column_config.TextColumn('Glosa ✏️', width='large', help='Es el texto que irá al libro. Corríjalo si el XML venía dañado.'),
+            'Regla': st.column_config.TextColumn('Regla', width='medium'),
             'Alertas': st.column_config.TextColumn('Alertas', width='large'),
             'Por qué': st.column_config.TextColumn('Por qué', width='large'),
         },
-        disabled=[c for c in df.columns if c != 'Cuenta'], key=f'editor_{filtro}_{lote.generado.timestamp()}')
+        disabled=[c for c in df.columns if c not in ('Cuenta', 'Glosa')], key=f'editor_{filtro}_{lote.generado.timestamp()}')
 
-    cambios = 0
+    cambios, cambios_glosa = 0, 0
     for _, row in editado.iterrows():
         p = lote.por_id(row['id'])
+        if not p:
+            continue
         nueva = str(row['Cuenta'] or '').strip()
-        if p and nueva != (p.cuenta or ''):
+        if nueva != (p.cuenta or ''):
             if plan and nueva and not plan.existe(nueva):
                 st.warning(f'{p.c.serie_numero}: la cuenta {nueva} no existe en el plan. Se aplica igual, revise.')
             S.aplicar_correccion(lote, row['id'], nueva)
             cambios += 1
-    if cambios:
-        st.success(f'{cambios} cuenta(s) corregida(s) y aprendida(s) para la próxima vez.')
+        glosa_nueva = str(row['Glosa'] or '').strip()
+        if glosa_nueva != (p.glosa or ''):
+            S.corregir_glosa(lote, row['id'], glosa_nueva, glosa_ascii)
+            cambios_glosa += 1
+    if cambios or cambios_glosa:
+        if cambios:
+            st.success(f'{cambios} cuenta(s) corregida(s) y aprendida(s) para la próxima vez.')
+        if cambios_glosa:
+            st.success(f'{cambios_glosa} glosa(s) corregida(s).')
         st.rerun()
 
     # ayuda para buscar cuentas del plan

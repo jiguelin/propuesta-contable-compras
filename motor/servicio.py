@@ -17,7 +17,7 @@ import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from . import pcge
+from . import pcge, reglas as kb
 from .clasificador import Contexto, Propuesta, procesar_lote, resumen
 from .detracciones import Constancia, cruzar, leer_constancias
 from .excel_newcontasis import generar_excel_importacion, generar_excel_revision
@@ -134,15 +134,33 @@ class Servicio:
     def cargar_historial(self, ruc: str, data: bytes) -> ResumenHistorial:
         h = leer_historial_excel(data)
         self.db.guardar_historial_stats(ruc, dict(h.frecuencia_cuentas), h.descripciones)
+        bloqueadas = set()
         for ruc_prov, cnt in h.por_proveedor.items():
             for cuenta, n in cnt.items():
+                if kb.cuenta_bloqueada(cuenta, self.db.reglas(ruc)):
+                    bloqueadas.add(cuenta)
+                    continue
                 fam = pcge.familia_por_prefijo(cuenta)
                 self.db.aprender(ruc, ruc_prov, fam['prefijo'] if fam else cuenta[:3], cuenta, origen='historial', veces=n)
+        h.cuentas_bloqueadas = sorted(bloqueadas)
         if h.cuenta_haber_habitual:
             e = self.db.empresa(ruc)
             if e and e['cuenta_haber'] == '4212' and h.cuenta_haber_habitual != '4212':
                 pass  # no cambiamos la preferencia automáticamente; la app la muestra como sugerencia
         return h
+
+    # ---------- base de conocimiento (reglas) ----------
+    def reglas(self, ruc: str | None = None) -> list:
+        return self.db.reglas(ruc)
+
+    def guardar_regla(self, regla) -> int:
+        problema = kb.validar(regla)
+        if problema:
+            raise ValueError(problema)
+        return self.db.guardar_regla(regla)
+
+    def eliminar_regla(self, id_regla: int):
+        self.db.eliminar_regla(id_regla)
 
     # ---------- procesamiento ----------
     @staticmethod
@@ -159,14 +177,15 @@ class Servicio:
     def procesar(self, ruc: str, archivos: list[tuple[str, bytes]], cuenta_haber: str | None = None, periodo: str = '',
                  usar_ia: bool = True, excluir_bancos: bool = True, alerta_monto: float | None = None, umbral_ia: int = 90,
                  constancias: list[tuple[str, bytes]] | None = None, usd_en_soles: bool = True, umbral_activo: float = 1800,
-                 excluir_detraccion_sin_constancia: bool = True) -> Lote:
+                 excluir_detraccion_sin_constancia: bool = True, glosa_ascii: bool = True) -> Lote:
         e = self.db.empresa(ruc) or {'nombre': ruc, 'cuenta_haber': '4212', 'alerta_monto': 20000}
         cuenta_haber = (cuenta_haber or e['cuenta_haber'] or '4212').strip()
         alerta_monto = alerta_monto if alerta_monto is not None else e['alerta_monto']
         plan = self.db.plan(ruc)
         ctx = Contexto(plan=plan, tc=self.db.tc(), memoria_proveedor=lambda rp: self.db.memoria_proveedor(ruc, rp),
                        historial_stats=self.db.historial_stats(ruc), cuenta_haber=cuenta_haber, alerta_monto=alerta_monto,
-                       excluir_bancos=excluir_bancos, ia=crear_ia(self.api_key) if usar_ia else None, umbral_ia=umbral_ia)
+                       excluir_bancos=excluir_bancos, ia=crear_ia(self.api_key) if usar_ia else None, umbral_ia=umbral_ia,
+                       reglas=self.db.reglas(ruc), glosa_ascii=glosa_ascii)
         comps = [parse_xml_bytes(b, n) for n, b in extraer_xml(archivos)]
         comps.sort(key=lambda c: (c.fecha_emision, c.serie_numero))
         if not periodo:   # mes con más comprobantes
@@ -206,12 +225,31 @@ class Servicio:
         p.av = pcge.av_por_cuenta(cuenta)
         if p.estado == 'revisar' and cuenta:
             p.estado = 'ok'
+        bloqueo = kb.cuenta_bloqueada(cuenta, self.db.reglas(lote.ruc))
+        if bloqueo:
+            p.alertas = [a for a in p.alertas if 'bloqueada' not in a] + [
+                f'ATENCIÓN: {cuenta} está bloqueada ({bloqueo.nombre}). {bloqueo.nota[:160]} '
+                f'Se registró porque usted la escribió, pero no se guardará en la memoria.']
+            aprender = False
         if aprender and cuenta and p.c.ruc_emisor:
             self.db.aprender(lote.ruc, p.c.ruc_emisor, p.concepto or (pcge.familia_por_prefijo(cuenta) or {}).get('prefijo', cuenta[:3]), cuenta, origen='correccion')
+        return p
+
+    def corregir_glosa(self, lote: Lote, pid: str, glosa: str, ascii_estricto: bool = True):
+        """La persona editó la glosa en la tabla: se limpia igual que las automáticas y se da por buena."""
+        from .texto import normalizar
+        p = lote.por_id(pid)
+        if not p:
+            return None
+        p.glosa, perdida = normalizar(glosa, ascii_estricto, 60)
+        if not perdida:
+            p.glosa_revisar = False
+            p.alertas = [a for a in p.alertas if 'glosa' not in a.lower()]
         return p
 
     def confirmar_lote(self, lote: Lote):
         """Al descargar: todo lo aceptado sin cambios también refuerza la memoria (proveedor+concepto)."""
         for p in lote.propuestas:
-            if p.estado == 'ok' and p.cuenta and p.c.ruc_emisor and p.fuente != 'manual':
+            if p.estado == 'ok' and p.cuenta and p.c.ruc_emisor and p.fuente not in ('manual', 'regla') \
+                    and not kb.cuenta_bloqueada(p.cuenta, self.db.reglas(lote.ruc)):
                 self.db.aprender(lote.ruc, p.c.ruc_emisor, p.concepto, p.cuenta, origen='confirmado')

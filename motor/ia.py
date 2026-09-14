@@ -39,7 +39,8 @@ def crear_ia(api_key: str | None = None, modelo: str = MODELO_DEFECTO, max_candi
         return None
 
     def ia(p, ctx):
-        from . import pcge
+        from . import pcge, reglas as kb
+        from .clasificador import candidatas_para
         c = p.c
         # candidatas: las de la familia + las más usadas por la empresa (historial) + la actual
         cands = {cu.codigo: cu for cu in p.candidatas}
@@ -52,9 +53,10 @@ def crear_ia(api_key: str | None = None, modelo: str = MODELO_DEFECTO, max_candi
                 cands.setdefault(p.cuenta, ctx.plan.get(p.cuenta))
             # si la familia dominante no está clara, añadir cuentas hoja de familias de gasto frecuentes
             if len(cands) < 6:
-                for pref in ('656', '639', '6329', '6343', '6371', '601', '336'):
-                    for cu in ctx.plan.con_prefijo(pref)[:2]:
+                for pref in ('656', '638', '6329', '6343', '6371', '601', '336'):
+                    for cu in candidatas_para(pref, ctx)[:2]:
                         cands.setdefault(cu.codigo, cu)
+        cands = {k: v for k, v in cands.items() if not kb.cuenta_bloqueada(k, getattr(ctx, 'reglas', []))}
         if not cands:
             return None
         lista = list(cands.values())[:max_candidatas]
@@ -75,6 +77,8 @@ Cuentas candidatas (código | descripción):
 {cuentas_txt}
 
 Referencia PCGE: {pcge.NATURALEZA_PCGE.get(p.familia[:2], '')}
+
+Está PROHIBIDO proponer cualquier cuenta fuera de esa lista.
 
 Responde SOLO un JSON: {{"cuenta": "<código exacto de la lista>", "confianza": <0-100>, "razon": "<una línea, máx 120 caracteres>"}}"""
         raw = _llamar(prompt, api_key, modelo)

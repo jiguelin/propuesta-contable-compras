@@ -29,6 +29,7 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
 from .clasificador import Propuesta
+from .texto import limpiar
 
 CABECERAS = ['FECHA EMISION', 'FECHA VENC/PAGO', 'TIPO DOC', 'SERIE', 'AÑO DUA', 'NUMERO', 'TIPO DOC PROV', 'NUM DOC PROV', 'RAZON SOCIAL',
              'BASE IMP GRAV', 'IGV', 'BASE IMP MIXTA', 'IGV MIXTA', 'BASE IMP NO GRAV', 'IGV NO GRAV', 'VALOR NO GRAVADO', 'ISC', 'OTROS TRIBUTOS', 'IMPORTE TOTAL',
@@ -97,7 +98,7 @@ def fila_newcontasis(p: Propuesta, cuenta_haber: str, cuenta_icbper: str = '', c
             igv = _n(igv + dif)
 
     return [
-        f_emi, f_ven, c.tipo_codigo, serie, '', numero, tipo_prov, c.ruc_emisor[:11], c.nombre_emisor[:60],   # A-I
+        f_emi, f_ven, c.tipo_codigo, serie, '', numero, tipo_prov, c.ruc_emisor[:11], limpiar(c.nombre_emisor, True, 60),   # A-I
         gravadas, igv, 0.0, 0.0, 0.0, 0.0, no_grav, isc, otros_trib, total,                                   # J-S
         '', p.det_constancia or '', constancia_fecha,                                                          # T-V  constancia de detracción (si se cargó)
         tc,                                                                                                    # W  TC de la fecha (soles y dólares)

@@ -99,7 +99,7 @@ FAMILIAS = [
     dict(prefijo='6367', nombre='Cable', av=5,
          kw=('CABLE TV', 'TV CABLE', 'TELEVISION POR CABLE', 'TELEVISIÓN POR CABLE', 'DIRECTV', 'MOVISTAR TV')),
     dict(prefijo='6371', nombre='Publicidad', av=5,
-         kw=('PUBLICIDAD', 'ANUNCIO', 'META ADS', 'FACEBOOK ADS', 'GOOGLE ADS', 'PAUTA', 'BANNER', 'VOLANTE', 'BROCHURE', 'AFICHE', 'GIGANTOGRAFIA', 'GIGANTOGRAFÍA', 'SPOT', 'INFLUENCER', 'REDES SOCIALES', 'MERCHANDISING', 'TARJETAS DE PRESENTACION', 'TARJETAS DE PRESENTACIÓN')),
+         kw=('PUBLICIDAD', 'ANUNCIO', 'META ADS', 'FACEBOOK ADS', 'GOOGLE ADS', 'PAUTA', 'BANNER', 'VOLANTE', 'BROCHURE', 'AFICHE', 'GIGANTOGRAFIA', 'GIGANTOGRAFÍA', 'SPOT', 'INFLUENCER', 'REDES SOCIALES', 'MERCHANDISING', 'TARJETAS DE PRESENTACION', 'TARJETAS DE PRESENTACIÓN', 'EDICION DE VIDEO', 'EDICIÓN DE VIDEO', 'PRODUCCION DE VIDEO', 'PRODUCCIÓN DE VIDEO', 'VIDEOS', 'FILMACION', 'FILMACIÓN', 'FOTOGRAFIA', 'FOTOGRAFÍA', 'SESION DE FOTOS', 'SESIÓN DE FOTOS', 'AUDIOVISUAL', 'CONTENIDO DIGITAL', 'DISEÑO GRAFICO', 'DISEÑO GRÁFICO', 'CATALOGO DE PRODUCTOS', 'CATÁLOGO DE PRODUCTOS')),
     dict(prefijo='6372', nombre='Publicaciones', av=5,
          kw=('PUBLICACION', 'PUBLICACIÓN', 'AVISO EN DIARIO', 'EDICTO', 'EL PERUANO')),
     dict(prefijo='6373', nombre='Relaciones públicas', av=4,
@@ -155,6 +155,18 @@ EMISOR_NO_GASTO = (
     ('VENTA DE DOLARES', 'Operación de cambio de moneda: no es un gasto.'),
     ('VENTA DE DÓLARES', 'Operación de cambio de moneda: no es un gasto.'),
 )
+
+
+# Nombres que delatan una entidad financiera cuyo RUC todavía no está en RUCS_BANCOS.
+# No se excluye automáticamente (podría ser un falso positivo): se avisa y decide la persona.
+EMISOR_FINANCIERA = ('BANCO ', 'BANBIF', 'BBVA', 'SCOTIABANK', 'INTERBANK', 'PICHINCHA', 'DINERS CLUB',
+                     'CAJA MUNICIPAL', 'CAJA RURAL', 'FINANCIERA ', 'EDPYME', 'COMPARTAMOS', 'MIBANCO',
+                     'CREDISCOTIA', 'RIPLEY BANCO', 'FALABELLA BANCO', 'BANCO FALABELLA', 'BANCO RIPLEY')
+
+
+def parece_financiera(nombre: str) -> bool:
+    t = ' ' + (nombre or '').upper() + ' '
+    return any(k in t for k in EMISOR_FINANCIERA)
 
 
 def familia_por_emisor(nombre: str) -> dict | None:

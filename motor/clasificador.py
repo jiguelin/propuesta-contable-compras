@@ -439,6 +439,9 @@ def procesar_lote(comprobantes: list[Comprobante], ctx: Contexto) -> list[Propue
             p.alertas.append('Operación exonerada/inafecta (sin IGV).')
         if not c.lineas:
             p.alertas.append('El XML no trae detalle de ítems.')
+        if pcge.parece_financiera(c.nombre_emisor) and c.ruc_emisor not in RUCS_BANCOS:
+            p.alertas.append(f'El emisor parece una entidad financiera ({c.nombre_emisor[:40]}) pero su RUC no está en la '
+                             'lista de bancos, así que NO se excluyó. Verifique si debe entrar en el registro de compras.')
         if c.doc_cliente and ctx.plan and ctx.plan.ruc and c.doc_cliente != ctx.plan.ruc:
             p.alertas.append(f'El comprobante está emitido a RUC {c.doc_cliente}, distinto al de la empresa.')
 

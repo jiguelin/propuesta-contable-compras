@@ -16,6 +16,7 @@ import streamlit as st
 
 from motor import __version__
 from motor.reglas import Regla
+from motor.texto import limpiar
 from motor.servicio import Servicio
 
 st.set_page_config(page_title='Propuesta Contable de Compras', page_icon='📊', layout='wide')
@@ -194,7 +195,8 @@ with st.sidebar:
 
 # ----------------------------------------------------------------------------- pantalla principal
 st.title('Propuesta Contable de Compras')
-st.caption('Suba los XML de compras del mes y obtenga el Excel listo para importar en NewContaSis, con el asiento propuesto y un reporte de observaciones.')
+st.caption(f'Versión {__version__} · Suba los XML de compras del mes y obtenga el Excel listo para importar en NewContaSis, '
+           'con el asiento propuesto y un reporte de observaciones.')
 
 if not ruc:
     st.info('Cree o seleccione una empresa en la barra lateral para comenzar.')
@@ -322,8 +324,8 @@ def _fila(p):
     c = p.c
     return {'id': p.id, '': p.semaforo, 'Conf.': p.confianza if p.estado in ('ok', 'revisar') else None, 'Fecha': c.fecha_emision,
             'Comprobante': c.serie_numero, 'Proveedor': c.nombre_emisor[:45], 'Mon.': c.moneda_codigo, 'Total': float(c.importe_total),
-            'Descripción': (c.lineas[0].descripcion[:60] + (' …' if len(c.lineas) > 1 else '')) if c.lineas else '',
-            'TC': p.tc or None, 'Cuenta': p.cuenta, 'Cuenta (descripción)': p.cuenta_desc[:45], 'Fuente': p.fuente,
+            'Descripción': (limpiar(c.lineas[0].descripcion, glosa_ascii, 60) + (' …' if len(c.lineas) > 1 else '')) if c.lineas else '',
+            'TC': float(p.tc) if p.tc else float('nan'), 'Cuenta': p.cuenta, 'Cuenta (descripción)': p.cuenta_desc[:45], 'Fuente': p.fuente,
             'Detracción': (f'{p.c.detraccion_porcentaje}% S/ {p.c.detraccion_monto}' if p.c.tiene_detraccion else '') + (f' · const. {p.det_constancia} {p.det_fecha:%d/%m/%Y}' if p.det_constancia else ''),
             'Activo fijo': 'SÍ' if p.posible_activo else '',
             'Glosa': p.glosa, 'Regla': p.regla,

@@ -151,3 +151,17 @@ def test_bloqueo_6399_y_regla_manda(tmp_path):
     s.aplicar_correccion(lote2, lote2.propuestas[0].id, '6399094')
     assert any('bloqueada' in a for a in lote2.propuestas[0].alertas)
     assert s.db.memoria_completa('20999999999') == []
+
+
+def test_excluye_operaciones_del_sistema_financiero(tmp_path):
+    """Facturas de bancos/cajas por intereses (tipo de operación 21xx) nunca entran, aunque el RUC no esté en la lista."""
+    base = (DATOS / '20100000002-01-F001-000777.xml').read_text(encoding='utf-8')
+    interes = (base.replace('listID="1001"', 'listID="2100"').replace('<cbc:InvoiceTypeCode>', '<cbc:InvoiceTypeCode listID="2100">')
+                   .replace('20100000002', '20999888777').replace('TIENDAS TECNO SAC', 'CAJA DESCONOCIDA SA')
+                   .replace('LAPTOP LENOVO THINKPAD 16GB', 'PAGO INTERES PRESTAMO'))
+    if 'listID="2100"' not in interes:
+        interes = interes.replace('<cbc:InvoiceTypeCode', '<cbc:InvoiceTypeCode listID="2100"', 1)
+    s = Servicio(ruta_db=tmp_path / 'p.db')
+    s.registrar_empresa('20611889683', 'ALQUMIN EIRL', plan_minimo())
+    p = s.procesar('20611889683', [('i.xml', interes.encode())], cuenta_haber='4212', usar_ia=False).propuestas[0]
+    assert p.estado == 'excluido' and '2100' in p.motivo

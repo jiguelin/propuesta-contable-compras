@@ -322,8 +322,8 @@ filtro = st.radio('Mostrar', ['Todos', 'Solo con observaciones', 'Solo 🔴/🟡
 
 def _fila(p):
     c = p.c
-    return {'id': p.id, '': p.semaforo, 'Conf.': p.confianza if p.estado in ('ok', 'revisar') else None, 'Fecha': c.fecha_emision,
-            'Comprobante': c.serie_numero, 'Proveedor': c.nombre_emisor[:45], 'Mon.': c.moneda_codigo, 'Total': float(c.importe_total),
+    return {'id': p.id, '': p.semaforo, 'Conf.': p.confianza if p.estado in ('ok', 'revisar') else float('nan'), 'Fecha': c.fecha_emision,
+            'Comprobante': c.serie_numero or c.archivo[:30], 'Proveedor': c.nombre_emisor[:45] or (p.motivo[:45] if p.estado != 'ok' else ''), 'Mon.': c.moneda_codigo, 'Total': float(c.importe_total),
             'Descripción': (limpiar(c.lineas[0].descripcion, glosa_ascii, 60) + (' …' if len(c.lineas) > 1 else '')) if c.lineas else '',
             'TC': float(p.tc) if p.tc else float('nan'), 'Cuenta': p.cuenta, 'Cuenta (descripción)': p.cuenta_desc[:45], 'Fuente': p.fuente,
             'Detracción': (f'{p.c.detraccion_porcentaje}% S/ {p.c.detraccion_monto}' if p.c.tiene_detraccion else '') + (f' · const. {p.det_constancia} {p.det_fecha:%d/%m/%Y}' if p.det_constancia else ''),

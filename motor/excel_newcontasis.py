@@ -30,6 +30,7 @@ from openpyxl.utils import get_column_letter
 
 from .clasificador import Propuesta
 from .texto import limpiar
+from .xml_parser import igv_reducido
 
 CABECERAS = ['FECHA EMISION', 'FECHA VENC/PAGO', 'TIPO DOC', 'SERIE', 'AÑO DUA', 'NUMERO', 'TIPO DOC PROV', 'NUM DOC PROV', 'RAZON SOCIAL',
              'BASE IMP GRAV', 'IGV', 'BASE IMP MIXTA', 'IGV MIXTA', 'BASE IMP NO GRAV', 'IGV NO GRAV', 'VALOR NO GRAVADO', 'ISC', 'OTROS TRIBUTOS', 'IMPORTE TOTAL',
@@ -127,7 +128,7 @@ def fila_newcontasis(p: Propuesta, cuenta_haber: str, cuenta_icbper: str = '', c
         'D' if es_usd else 'S', _n(c.importe_total) if es_usd else '', f_ven, condicion,                        # AB-AE
         p.cuenta, cta_otros, cuenta_haber, '', '',                                                             # AF-AJ
         regimen, pct, imp, '', p.det_constancia or '', constancia_fecha, '',                                    # AK-AQ (AO/AP = constancia)
-        18.0 if c.igv else 0.0, p.glosa[:60],                                                                   # AR-AS
+        _n(c.igv_tasa or 18) if c.igv else 0.0, p.glosa[:60],                                                   # AR-AS  % IGV real (10.50 marca la casilla en Contasis)
         '1' if c.tiene_percepcion else '', _n(Decimal(str(base_reg)) * k) if base_reg != '' else '',            # AT-AU
         p.av, _n(c.icbper) if c.icbper else '', (cuenta_icbper if c.icbper else ''),                            # AV-AX
     ]
@@ -250,6 +251,25 @@ def generar_excel_revision(props: list[Propuesta], cuenta_haber: str, empresa: s
             for cell in row:
                 cell.number_format = '#,##0.00'
         ws5.freeze_panes = 'A4'
+
+    red = [p for p in props if p.estado in ('ok', 'revisar') and p.cuenta and igv_reducido(p.c)]
+    if red:
+        ws6 = wb.create_sheet('IGV DISTINTO 18%')
+        ws6.append(['Facturas con tasa de IGV distinta del 18 % (MYPE de restaurantes y hoteles: 10.5 % en 2026). La columna AR lleva la '
+                    'tasa real, con lo que Contasis marca solo la casilla "IGV 10.5%". Verificar en la línea 401111.'])
+        ws6['A1'].font = Font(bold=True)
+        ws6.append([])
+        ws6.append(['Fecha', 'Serie-Número', 'RUC', 'Proveedor', 'Base', 'IGV', 'Total', 'Tasa IGV %', 'Observación'])
+        for cell in ws6[3]:
+            cell.font = Font(bold=True, color='FFFFFF')
+            cell.fill = PatternFill('solid', fgColor='1F3B5C')
+        for p in red:
+            c = p.c
+            ws6.append([c.fecha_emision, c.serie_numero, c.ruc_emisor, c.nombre_emisor, _n(c.gravadas), _n(c.igv), _n(c.importe_total),
+                        _n(c.igv_tasa), 'Ítems con tasas distintas: revisar a mano' if c.igv_tasa_mixta else ''])
+        for j, w in enumerate([11, 16, 13, 40, 11, 10, 11, 10, 40], start=1):
+            ws6.column_dimensions[get_column_letter(j)].width = w
+        ws6.freeze_panes = 'A4'
 
     ws4 = wb.create_sheet('NEWCONTASIS (ref)')
     ws4.append(CABECERAS)

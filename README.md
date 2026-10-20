@@ -132,6 +132,15 @@ Sin API key la app funciona igual (solo reglas + plan + memoria).
   de revisión lista los comprobantes y los montos; también sale como alerta en cada factura.
 - Validado con una importación real (CBC MARKET F3T1-435534, 20/10/2026).
 
+## Novedades v0.3.4
+
+- **IGV distinto del 18 %** (MYPE de restaurantes y hoteles, Ley 31556 y modificatorias: 10 % en 2025, 10.5 % en 2026,
+  15 % en 2027). La app lee la tasa del XML (de la cabecera o de los ítems; si no viene, IGV ÷ base) y la pone en la
+  columna **AR (% IGV)**, que antes iba fija en 18.00. Con AR = 10.50, Contasis marca sola la casilla "IGV 10.5%" de la
+  línea 401111, necesaria para enviar bien el SIRE (validado el 20/10/2026 con GASTRONOMIA F V FA01-398).
+- Además: alerta por factura, filtro "IGV ≠ 18%", columna "IGV %" en la tabla y hoja **IGV DISTINTO 18%** en el Excel de
+  revisión. Si una factura mezcla tasas en sus ítems, se avisa para revisarla a mano.
+
 ## Hoja de ruta
 
 - **v0.1 (esta)**: flujo completo XML → Excel + reporte, memoria por proveedor+concepto, TC, detracción, IA opcional.

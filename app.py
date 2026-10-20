@@ -17,6 +17,7 @@ import streamlit as st
 from motor import __version__
 from motor.reglas import Regla
 from motor.texto import limpiar
+from motor.xml_parser import igv_reducido
 from motor.servicio import Servicio
 
 st.set_page_config(page_title='Propuesta Contable de Compras', page_icon='📊', layout='wide')
@@ -319,13 +320,17 @@ if n_glosa:
 if n_det_exc:
     st.warning(f'{n_det_exc} factura(s) con detracción quedaron FUERA del Excel por no tener constancia de depósito. Están en el filtro "Con detracción" y en la hoja EXCLUIDOS; cuando se pague la detracción, vuelva a generar con la constancia.')
 m[7].metric('Posible activo fijo', n_act)
+n_red = sum(1 for p in lote.propuestas if p.estado in ('ok', 'revisar') and igv_reducido(p.c))
+if n_red:
+    st.info(f'{n_red} factura(s) con IGV distinto del 18 % (restaurantes/hoteles MYPE). Van con su tasa real en la columna AR y Contasis '
+            'marca solo la casilla de IGV reducido; verifíquelas con el filtro "IGV ≠ 18%" o la hoja IGV DISTINTO 18% del Excel de revisión.')
 if lote.constancias_sin_factura:
     st.warning(f'{len(lote.constancias_sin_factura)} constancia(s) de detracción no corresponden a ninguna factura del lote: ' +
                ', '.join(f'{c.numero} ({c.ruc_proveedor} {c.comprobante})' for c in lote.constancias_sin_factura[:8]) + ('…' if len(lote.constancias_sin_factura) > 8 else ''))
 
 st.markdown('<div class="paso">Revise y corrija la cuenta directamente en la tabla (doble clic en la celda "Cuenta")</div>', unsafe_allow_html=True)
 
-filtro = st.radio('Mostrar', ['Todos', 'Solo con observaciones', 'Solo 🔴/🟡', 'Con detracción', 'Posibles activos fijos', 'Glosa reparada', 'Dólares', 'Excluidos'], horizontal=True, label_visibility='collapsed')
+filtro = st.radio('Mostrar', ['Todos', 'Solo con observaciones', 'Solo 🔴/🟡', 'Con detracción', 'Posibles activos fijos', 'Glosa reparada', 'IGV ≠ 18%', 'Dólares', 'Excluidos'], horizontal=True, label_visibility='collapsed')
 
 
 def _fila(p):
@@ -336,6 +341,7 @@ def _fila(p):
             'TC': float(p.tc) if p.tc else float('nan'), 'Cuenta': p.cuenta, 'Cuenta (descripción)': p.cuenta_desc[:45], 'Fuente': p.fuente,
             'Detracción': (f'{p.c.detraccion_porcentaje}% S/ {p.c.detraccion_monto}' if p.c.tiene_detraccion else '') + (f' · const. {p.det_constancia} {p.det_fecha:%d/%m/%Y}' if p.det_constancia else ''),
             'Activo fijo': 'SÍ' if p.posible_activo else '',
+            'IGV %': (f'{float(c.igv_tasa):g}' + (' ⚠' if igv_reducido(c) else '')) if c.igv else '',
             'Glosa': p.glosa, 'Regla': p.regla,
             'Alertas': ' | '.join(p.alertas) if p.alertas else (p.motivo if p.estado in ('excluido', 'duplicado', 'error') else ''),
             'Por qué': p.explicacion}
@@ -352,6 +358,8 @@ elif filtro == 'Posibles activos fijos':
     props = [p for p in props if p.estado in ('ok', 'revisar') and p.posible_activo]
 elif filtro == 'Glosa reparada':
     props = [p for p in props if p.glosa_revisar]
+elif filtro == 'IGV ≠ 18%':
+    props = [p for p in props if p.estado in ('ok', 'revisar') and igv_reducido(p.c)]
 elif filtro == 'Dólares':
     props = [p for p in props if p.estado in ('ok', 'revisar') and p.c.moneda_codigo != 'PEN']
 elif filtro == 'Excluidos':

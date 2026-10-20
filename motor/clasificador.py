@@ -23,7 +23,7 @@ from . import pcge, reglas as kb
 from .texto import normalizar
 from .plan_cuentas import Cuenta, PlanCuentas
 from .tipo_cambio import HistorialTC
-from .xml_parser import (Comprobante, RUCS_BANCOS, RUCS_COMBUSTIBLE, RUCS_RESTAURANTES, RUCS_SEGUROS,
+from .xml_parser import (Comprobante, RUCS_BANCOS, OPERACIONES_FINANCIERAS, RUCS_COMBUSTIBLE, RUCS_RESTAURANTES, RUCS_SEGUROS,
                          RUCS_SERVICIOS_PUBLICOS, texto_items)
 
 TIPOS_COMPRA = {'01', '03', '07', '08'}      # factura, boleta, NC, ND
@@ -240,9 +240,16 @@ def procesar_lote(comprobantes: list[Comprobante], ctx: Contexto) -> list[Propue
             p.motivo = c.error
             continue
         # ---- 1. exclusiones ----
-        if c.ruc_emisor in RUCS_BANCOS or c.tipo_codigo == '30':
+        op_fin = OPERACIONES_FINANCIERAS.get(c.tipo_operacion)
+        if c.ruc_emisor in RUCS_BANCOS or c.tipo_codigo == '30' or op_fin:
             p.estado = 'excluido'
-            p.motivo = f'Banco / entidad financiera ({RUCS_BANCOS.get(c.ruc_emisor, "documento tipo 30")})'
+            if c.ruc_emisor in RUCS_BANCOS:
+                detalle = RUCS_BANCOS[c.ruc_emisor]
+            elif op_fin:
+                detalle = f'tipo de operación {c.tipo_operacion} "{op_fin}", exclusivo del sistema financiero'
+            else:
+                detalle = 'documento tipo 30'
+            p.motivo = f'Banco / entidad financiera ({detalle})'
             if ctx.excluir_bancos:
                 continue
             p.estado = 'ok'

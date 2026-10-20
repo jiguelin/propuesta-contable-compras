@@ -114,6 +114,13 @@ Sin API key la app funciona igual (solo reglas + plan + memoria).
   El reparto de familias se corrigió en consecuencia: 638 servicios de contratistas, 6329 intermediación/comisiones.
 - Las palabras clave ahora puntúan por especificidad: "COMISION POR TRANSFERENCIA" (6391) le gana a "COMISION" (6329).
 
+## Novedades v0.3.2
+
+- **Facturas de bancos por intereses fuera del Excel**: además de la lista de RUC de bancos (se agregó Mibanco),
+  se excluye todo comprobante con tipo de operación 2100–2106 del catálogo SUNAT, códigos que solo usa el sistema
+  financiero (créditos a empresas, consumo, etc.). Así queda fuera cualquier banco, caja o financiera aunque su RUC
+  no esté en la lista. Quedan visibles en la hoja EXCLUIDOS con el motivo.
+
 ## Hoja de ruta
 
 - **v0.1 (esta)**: flujo completo XML → Excel + reporte, memoria por proveedor+concepto, TC, detracción, IA opcional.

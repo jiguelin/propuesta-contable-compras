@@ -87,8 +87,17 @@ MEDIOS_PAGO_DETRACCION = {'001': 'Depósito en cuenta', '002': 'Giro', '003': 'T
 RUCS_BANCOS = {
     '20100047218': 'BCP', '20100130204': 'BBVA', '20354766437': 'Interbank', '20100053455': 'Interbank',
     '20522108720': 'Scotiabank', '20258702832': 'BanBif', '20451844326': 'Pichincha', '20100105862': 'Banco de la Nacion',
-    '20100043140': 'Scotiabank',
+    '20100043140': 'Scotiabank', '20382036655': 'Mibanco',
 }
+
+# Tipos de operación (catálogo 51 SUNAT) que SOLO usan las entidades del sistema financiero:
+# 2100 créditos a empresas, 2101 consumo revolvente, 2102 consumo no revolvente,
+# 2103 otras operaciones no gravadas, 2104 otras operaciones gravadas, 2105/2106 reservados al sistema financiero.
+# Sirve para excluir a cualquier banco/caja/financiera aunque su RUC no esté en RUCS_BANCOS.
+OPERACIONES_FINANCIERAS = {'2100': 'Créditos a empresas', '2101': 'Créditos de consumo revolvente',
+                           '2102': 'Créditos de consumo no revolvente', '2103': 'Otras operaciones no gravadas (sistema financiero)',
+                           '2104': 'Otras operaciones gravadas (sistema financiero)', '2105': 'Operación del sistema financiero',
+                           '2106': 'Operación del sistema financiero'}
 RUCS_COMBUSTIBLE = {
     '20258092133': 'Repsol', '20100128056': 'Primax', '20330291017': 'Petroperu', '20543298922': 'Petrogas', '20511995028': 'Terpel Peru',
 }

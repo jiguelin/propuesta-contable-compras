@@ -59,7 +59,16 @@ def _serie_numero(sn: str) -> tuple[str, str]:
     return sn[:6], ''
 
 
-def fila_newcontasis(p: Propuesta, cuenta_haber: str, cuenta_icbper: str = '', cuenta_otros_tributos: str = '', usd_en_soles: bool = True) -> list:
+def importe_percepcion(p: Propuesta, cuenta_percepcion: str) -> Decimal:
+    """Percepción del mismo comprobante que se lleva al asiento (0 si no corresponde o la opción está apagada)."""
+    c = p.c
+    if not cuenta_percepcion or not c.tiene_percepcion or c.tiene_detraccion or not c.percepcion_monto or c.percepcion_monto <= 0:
+        return Decimal(0)
+    return Decimal(str(c.percepcion_monto))
+
+
+def fila_newcontasis(p: Propuesta, cuenta_haber: str, cuenta_icbper: str = '', cuenta_otros_tributos: str = '', usd_en_soles: bool = True,
+                     cuenta_percepcion: str = '') -> list:
     c = p.c
     serie, numero = _serie_numero(c.serie_numero)
     f_emi = _f(c.fecha_emision)
@@ -97,6 +106,18 @@ def fila_newcontasis(p: Propuesta, cuenta_haber: str, cuenta_icbper: str = '', c
         if 0 < abs(dif) <= 0.05:
             igv = _n(igv + dif)
 
+    # Percepción en el mismo comprobante: NewContaSis solo crea una línea de cuenta adicional por "otros tributos" (R + cuenta AG).
+    # Se usa para que el asiento salga con la 40113 al Debe y el Haber por el total pagado. Ojo: en Contasis queda también en
+    # "Otros T y C" de la línea 401111; ahí se corrige a mano (Otros T y C = 0, Total = importe del comprobante), porque la
+    # percepción NO va en el Registro de Compras. La hoja PERCEPCIONES del Excel de revisión lista esas correcciones.
+    perc = importe_percepcion(p, cuenta_percepcion)
+    cta_otros = (cuenta_otros_tributos or p.cuenta) if otros_trib else ''
+    if perc:
+        perc_n = _n(perc * k)
+        otros_trib = _n(otros_trib + perc_n)
+        total = _n(total + perc_n)
+        cta_otros = cuenta_percepcion
+
     return [
         f_emi, f_ven, c.tipo_codigo, serie, '', numero, tipo_prov, c.ruc_emisor[:11], limpiar(c.nombre_emisor, True, 60),   # A-I
         gravadas, igv, 0.0, 0.0, 0.0, 0.0, no_grav, isc, otros_trib, total,                                   # J-S
@@ -104,7 +125,7 @@ def fila_newcontasis(p: Propuesta, cuenta_haber: str, cuenta_icbper: str = '', c
         tc,                                                                                                    # W  TC de la fecha (soles y dólares)
         None, ref_tipo, ref_serie, ref_num,                                                                     # X-AA
         'D' if es_usd else 'S', _n(c.importe_total) if es_usd else '', f_ven, condicion,                        # AB-AE
-        p.cuenta, (cuenta_otros_tributos or p.cuenta) if otros_trib else '', cuenta_haber, '', '',              # AF-AJ
+        p.cuenta, cta_otros, cuenta_haber, '', '',                                                             # AF-AJ
         regimen, pct, imp, '', p.det_constancia or '', constancia_fecha, '',                                    # AK-AQ (AO/AP = constancia)
         18.0 if c.igv else 0.0, p.glosa[:60],                                                                   # AR-AS
         '1' if c.tiene_percepcion else '', _n(Decimal(str(base_reg)) * k) if base_reg != '' else '',            # AT-AU
@@ -129,12 +150,14 @@ def _escribir_filas(ws, filas, inicio=1):
                 cell.number_format = '@'
 
 
-def generar_excel_importacion(props: list[Propuesta], cuenta_haber: str, cuenta_icbper: str = '', con_cabecera: bool = False, usd_en_soles: bool = True) -> bytes:
+def generar_excel_importacion(props: list[Propuesta], cuenta_haber: str, cuenta_icbper: str = '', con_cabecera: bool = False, usd_en_soles: bool = True,
+                              cuenta_percepcion: str = '') -> bytes:
     """Excel listo para importar: solo filas de datos (o con cabecera de referencia si con_cabecera)."""
     wb = Workbook()
     ws = wb.active
     ws.title = 'COMPRAS'
-    filas = [fila_newcontasis(p, cuenta_haber, cuenta_icbper, usd_en_soles=usd_en_soles) for p in props if p.estado in ('ok', 'revisar') and p.cuenta]
+    filas = [fila_newcontasis(p, cuenta_haber, cuenta_icbper, usd_en_soles=usd_en_soles, cuenta_percepcion=cuenta_percepcion)
+             for p in props if p.estado in ('ok', 'revisar') and p.cuenta]
     inicio = 1
     if con_cabecera:
         ws.append(CABECERAS)
@@ -147,7 +170,8 @@ def generar_excel_importacion(props: list[Propuesta], cuenta_haber: str, cuenta_
     return buf.getvalue()
 
 
-def generar_excel_revision(props: list[Propuesta], cuenta_haber: str, empresa: str, periodo: str, usd_en_soles: bool = True) -> bytes:
+def generar_excel_revision(props: list[Propuesta], cuenta_haber: str, empresa: str, periodo: str, usd_en_soles: bool = True,
+                           cuenta_percepcion: str = '') -> bytes:
     """Excel amigable: hoja PROPUESTA (todas las filas con semáforo), REVISAR, EXCLUIDOS, y NEWCONTASIS (con cabecera)."""
     wb = Workbook()
     ws = wb.active
@@ -198,12 +222,42 @@ def generar_excel_revision(props: list[Propuesta], cuenta_haber: str, empresa: s
     for j, w in enumerate([11, 16, 13, 36, 11, 60, 30], start=1):
         ws3.column_dimensions[get_column_letter(j)].width = w
 
+    perc_props = [p for p in props if p.estado in ('ok', 'revisar') and p.cuenta and importe_percepcion(p, cuenta_percepcion)]
+    if perc_props:
+        ws5 = wb.create_sheet('PERCEPCIONES')
+        ws5.append([f'Corregir en Contasis después de importar: en la línea 401111 de cada asiento poner Otros T y C = 0 y Total = importe del comprobante. '
+                    f'La línea {cuenta_percepcion} y el Haber por el total pagado se dejan como están.'])
+        ws5['A1'].font = Font(bold=True)
+        ws5.append([])
+        ws5.append(['Fecha', 'Serie-Número', 'RUC', 'Proveedor', 'Moneda', f'Percepción ({cuenta_percepcion})', 'Otros T y C (poner)',
+                    'Total del comprobante (poner)', 'Total pagado (Haber)'])
+        for cell in ws5[3]:
+            cell.font = Font(bold=True, color='FFFFFF')
+            cell.fill = PatternFill('solid', fgColor='1F3B5C')
+        tot = 0.0
+        for p in perc_props:
+            c = p.c
+            fila = fila_newcontasis(p, cuenta_haber, usd_en_soles=usd_en_soles, cuenta_percepcion=cuenta_percepcion)
+            percep = round(fila[17] - fila_newcontasis(p, cuenta_haber, usd_en_soles=usd_en_soles)[17], 2)
+            tot += percep
+            ws5.append([c.fecha_emision, c.serie_numero, c.ruc_emisor, c.nombre_emisor, c.moneda_codigo, percep,
+                        round(fila[17] - percep, 2), round(fila[18] - percep, 2), fila[18]])
+        ws5.append(['', '', '', 'TOTAL', '', round(tot, 2)])
+        ws5[ws5.max_row][3].font = Font(bold=True)
+        for j, w in enumerate([11, 16, 13, 40, 8, 16, 16, 22, 18], start=1):
+            ws5.column_dimensions[get_column_letter(j)].width = w
+        for row in ws5.iter_rows(min_row=4, min_col=6, max_col=9):
+            for cell in row:
+                cell.number_format = '#,##0.00'
+        ws5.freeze_panes = 'A4'
+
     ws4 = wb.create_sheet('NEWCONTASIS (ref)')
     ws4.append(CABECERAS)
     for cell in ws4[1]:
         cell.font = Font(bold=True, size=8)
         cell.alignment = Alignment(wrap_text=True)
-    _escribir_filas(ws4, [fila_newcontasis(p, cuenta_haber, usd_en_soles=usd_en_soles) for p in props if p.estado in ('ok', 'revisar') and p.cuenta], 2)
+    _escribir_filas(ws4, [fila_newcontasis(p, cuenta_haber, usd_en_soles=usd_en_soles, cuenta_percepcion=cuenta_percepcion)
+                          for p in props if p.estado in ('ok', 'revisar') and p.cuenta], 2)
     for j in range(1, 51):
         ws4.column_dimensions[get_column_letter(j)].width = 13
     ws4.freeze_panes = 'A2'

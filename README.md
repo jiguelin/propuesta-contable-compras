@@ -121,6 +121,17 @@ Sin API key la app funciona igual (solo reglas + plan + memoria).
   financiero (créditos a empresas, consumo, etc.). Así queda fuera cualquier banco, caja o financiera aunque su RUC
   no esté en la lista. Quedan visibles en la hoja EXCLUIDOS con el motivo.
 
+## Novedades v0.3.3
+
+- **Percepción en el mismo comprobante → cuenta 40113 en el asiento**: la plantilla de NewContaSis no tiene una columna
+  para la cuenta de percepción. La única línea de cuenta adicional que acepta es "otros tributos" (R + cuenta AG). Por eso,
+  en las facturas con percepción, R lleva la percepción, AG la cuenta (40113 por defecto, editable en Opciones; vacía = no
+  se agrega) y S el total pagado. El asiento sale completo: compras / 401111 / 40113 al Debe y el Haber por el total pagado.
+- **Corrección manual obligatoria en Contasis**: la percepción NO va en el Registro de Compras. Después de importar, en la
+  línea 401111 de cada una se pone Otros T y C = 0 y Total = importe del comprobante. La hoja **PERCEPCIONES** del Excel
+  de revisión lista los comprobantes y los montos; también sale como alerta en cada factura.
+- Validado con una importación real (CBC MARKET F3T1-435534, 20/10/2026).
+
 ## Hoja de ruta
 
 - **v0.1 (esta)**: flujo completo XML → Excel + reporte, memoria por proveedor+concepto, TC, detracción, IA opcional.

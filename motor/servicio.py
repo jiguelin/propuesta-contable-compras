@@ -20,7 +20,7 @@ from datetime import datetime
 from . import pcge, reglas as kb
 from .clasificador import Contexto, Propuesta, procesar_lote, resumen
 from .detracciones import Constancia, cruzar, leer_constancias
-from .excel_newcontasis import generar_excel_importacion, generar_excel_revision
+from .excel_newcontasis import generar_excel_importacion, generar_excel_revision, importe_percepcion
 from .historial import ResumenHistorial, leer_historial_excel
 from .ia import crear_ia
 from .memoria import Memoria
@@ -56,6 +56,7 @@ class Lote:
     tc_meses: list[str] = field(default_factory=list)
     generado: datetime = field(default_factory=datetime.now)
     usd_en_soles: bool = True
+    cuenta_percepcion: str = '40113'
     constancias_sin_factura: list = field(default_factory=list)
     n_constancias: int = 0
 
@@ -67,10 +68,12 @@ class Lote:
         return next((p for p in self.propuestas if p.id == pid), None)
 
     def excel_importacion(self, con_cabecera: bool = False) -> bytes:
-        return generar_excel_importacion(self.propuestas, self.cuenta_haber, con_cabecera=con_cabecera, usd_en_soles=self.usd_en_soles)
+        return generar_excel_importacion(self.propuestas, self.cuenta_haber, con_cabecera=con_cabecera, usd_en_soles=self.usd_en_soles,
+                                         cuenta_percepcion=self.cuenta_percepcion)
 
     def excel_revision(self) -> bytes:
-        return generar_excel_revision(self.propuestas, self.cuenta_haber, self.empresa, self.periodo, usd_en_soles=self.usd_en_soles)
+        return generar_excel_revision(self.propuestas, self.cuenta_haber, self.empresa, self.periodo, usd_en_soles=self.usd_en_soles,
+                                      cuenta_percepcion=self.cuenta_percepcion)
 
     def reporte_txt(self) -> str:
         return generar_reporte_txt(self.propuestas, self.empresa, self.ruc, self.periodo, self.cuenta_haber, self.alerta_monto, self.tc_meses, self.constancias_sin_factura, self.n_constancias)
@@ -177,7 +180,7 @@ class Servicio:
     def procesar(self, ruc: str, archivos: list[tuple[str, bytes]], cuenta_haber: str | None = None, periodo: str = '',
                  usar_ia: bool = True, excluir_bancos: bool = True, alerta_monto: float | None = None, umbral_ia: int = 90,
                  constancias: list[tuple[str, bytes]] | None = None, usd_en_soles: bool = True, umbral_activo: float = 1800,
-                 excluir_detraccion_sin_constancia: bool = True, glosa_ascii: bool = True) -> Lote:
+                 excluir_detraccion_sin_constancia: bool = True, glosa_ascii: bool = True, cuenta_percepcion: str = '40113') -> Lote:
         e = self.db.empresa(ruc) or {'nombre': ruc, 'cuenta_haber': '4212', 'alerta_monto': 20000}
         cuenta_haber = (cuenta_haber or e['cuenta_haber'] or '4212').strip()
         alerta_monto = alerta_monto if alerta_monto is not None else e['alerta_monto']
@@ -196,7 +199,8 @@ class Servicio:
         ctx.umbral_activo = umbral_activo
         props = procesar_lote(comps, ctx)
         lote = Lote(ruc=ruc, empresa=e['nombre'], periodo=periodo, cuenta_haber=cuenta_haber, propuestas=props,
-                    alerta_monto=alerta_monto, tc_meses=ctx.tc.meses_cargados() if ctx.tc else [], usd_en_soles=usd_en_soles)
+                    alerta_monto=alerta_monto, tc_meses=ctx.tc.meses_cargados() if ctx.tc else [], usd_en_soles=usd_en_soles,
+                    cuenta_percepcion=(cuenta_percepcion or '').strip())
         if constancias:
             lista = leer_constancias(constancias)
             lote.n_constancias, lote.constancias_sin_factura = cruzar(props, lista)
@@ -208,6 +212,16 @@ class Servicio:
                     p.motivo = (f'Detracción {p.c.detraccion_porcentaje}% (S/ {p.c.detraccion_monto}) sin constancia de depósito: no se puede usar el IGV todavía. '
                                 'Cuando tenga la constancia, vuelva a generar incluyéndola (o regístrela en el mes en que se pagó).')
                     p.alertas = [a for a in p.alertas if 'constancia' not in a.lower()]
+        if lote.cuenta_percepcion:
+            for p in props:
+                if p.estado in ('ok', 'revisar') and importe_percepcion(p, lote.cuenta_percepcion):
+                    c = p.c
+                    p.alertas = [a for a in p.alertas if not a.startswith('Con percepción')]
+                    p.alertas.append(f'Percepción S/ {c.percepcion_monto} → línea {lote.cuenta_percepcion} al Debe; Haber por S/ {c.percepcion_total}. '
+                                     f'En Contasis, línea 401111: Otros T y C = 0 y Total = {c.importe_total} (la percepción no va en el Registro de Compras).')
+                    if c.otros_tributos or c.otros_cargos:
+                        p.alertas.append(f'Además trae otros tributos/cargos (S/ {c.otros_tributos + c.otros_cargos}): quedan en la misma cuenta '
+                                         f'{lote.cuenta_percepcion}; revisar y separar a mano.')
         r = lote.resumen
         self.db.registrar_lote(ruc, periodo, r['total'], r['ok'], r['excluidos'], r['revisar'], r)
         return lote

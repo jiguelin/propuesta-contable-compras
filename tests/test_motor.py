@@ -1,3 +1,5 @@
+import io
+import re
 # -*- coding: utf-8 -*-
 """Pruebas del motor (sin Streamlit, sin IA):  python -m pytest -q"""
 import sys
@@ -165,3 +167,27 @@ def test_excluye_operaciones_del_sistema_financiero(tmp_path):
     s.registrar_empresa('20611889683', 'ALQUMIN EIRL', plan_minimo())
     p = s.procesar('20611889683', [('i.xml', interes.encode())], cuenta_haber='4212', usar_ia=False).propuestas[0]
     assert p.estado == 'excluido' and '2100' in p.motivo
+
+
+def test_percepcion_va_a_40113_como_otros_tributos(tmp_path):
+    """Factura con percepción: R = percepción, AG = 40113, S = total pagado; sin la opción, como antes."""
+    from motor.excel_newcontasis import fila_newcontasis
+    base = (DATOS / '20100000002-01-F001-000777.xml').read_text(encoding='utf-8')
+    total = re.search(r'<cbc:PayableAmount[^>]*>([^<]+)', base).group(1)
+    perc = f"{float(total) * 0.02:.2f}"
+    cargo = ('<cac:AllowanceCharge><cbc:ChargeIndicator>true</cbc:ChargeIndicator><cbc:AllowanceChargeReasonCode>51</cbc:AllowanceChargeReasonCode>'
+             f'<cbc:MultiplierFactorNumeric>0.02</cbc:MultiplierFactorNumeric><cbc:Amount currencyID="PEN">{perc}</cbc:Amount>'
+             f'<cbc:BaseAmount currencyID="PEN">{total}</cbc:BaseAmount></cac:AllowanceCharge>')
+    xml = base.replace('<cac:TaxTotal>', cargo + '<cac:TaxTotal>', 1)
+    s = Servicio(ruta_db=tmp_path / 'p.db')
+    s.registrar_empresa('20611889683', 'ALQUMIN EIRL', plan_minimo())
+    lote = s.procesar('20611889683', [('p.xml', xml.encode())], cuenta_haber='1011', usar_ia=False)
+    p = lote.propuestas[0]
+    assert p.c.tiene_percepcion and float(p.c.percepcion_monto) == float(perc)
+    f = fila_newcontasis(p, '1011', cuenta_percepcion='40113')
+    assert f[17] == float(perc) and f[32] == '40113' and round(f[18] - f[17], 2) == float(total)
+    assert any('Otros T y C = 0' in a for a in p.alertas)
+    sin = fila_newcontasis(p, '1011')
+    assert sin[17] == 0.0 and sin[32] == '' and sin[18] == float(total)
+    wb = openpyxl.load_workbook(io.BytesIO(lote.excel_revision()))
+    assert 'PERCEPCIONES' in wb.sheetnames

@@ -246,6 +246,13 @@ with c3:
     glosa_ascii = st.checkbox('Glosa sin tildes ni ñ (compatible con el PLE)', value=True,
                               help='Repara los caracteres dañados del XML (GESTIÃ¯Â¿Â½N → GESTION) y deja solo A-Z, '
                                    'números y puntuación básica, que es lo que acepta el PLE de SUNAT sin problemas.')
+    cuenta_percepcion = st.text_input('Cuenta de percepción (vacío = no agregarla)', value='40113',
+                                      help='Facturas con percepción en el mismo comprobante: la percepción va como "otros tributos" con esta cuenta, '
+                                           'así el asiento sale con la línea al Debe y el Haber por el total pagado. Después de importar, en la '
+                                           'línea 401111 poner Otros T y C = 0 y Total = importe del comprobante (lista en la hoja PERCEPCIONES '
+                                           'del Excel de revisión).').strip()
+    if plan and cuenta_percepcion and not plan.get(cuenta_percepcion):
+        st.warning(f'⚠ La cuenta {cuenta_percepcion} no existe en el plan de la empresa.')
     umbral_activo = st.number_input('Sospechar activo fijo desde S/', min_value=0.0, value=1800.0, step=100.0,
                                     help='Compras de equipos, muebles, vehículos, software, etc. con importe (incl. IGV) igual o mayor se marcan como posible activo fijo.')
 
@@ -280,7 +287,8 @@ if st.button('GENERAR PROPUESTA', type='primary', disabled=not archivos, use_con
             ss.lote = S.procesar(ruc, [(f.name, f.getvalue()) for f in archivos], cuenta_haber=cuenta_haber, periodo=periodo,
                                  usar_ia=usar_ia, excluir_bancos=excluir_bancos, alerta_monto=alerta_monto, umbral_activo=umbral_activo,
                                  constancias=[(f.name, f.getvalue()) for f in (constancias_up or [])] or None,
-                                 excluir_detraccion_sin_constancia=excluir_det, glosa_ascii=glosa_ascii)
+                                 excluir_detraccion_sin_constancia=excluir_det, glosa_ascii=glosa_ascii,
+                                 cuenta_percepcion=cuenta_percepcion)
             ss.confirmado = False
         except Exception as ex:
             st.error(f'No se pudo procesar: {ex}')

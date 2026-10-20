@@ -1,2 +1,2 @@
 """Motor de Propuesta Contable de Compras (independiente de la interfaz)."""
-__version__ = '0.3.2'
+__version__ = '0.3.3'

@@ -1,3 +1,4 @@
+from decimal import Decimal
 import io
 import re
 # -*- coding: utf-8 -*-
@@ -191,3 +192,24 @@ def test_percepcion_va_a_40113_como_otros_tributos(tmp_path):
     assert sin[17] == 0.0 and sin[32] == '' and sin[18] == float(total)
     wb = openpyxl.load_workbook(io.BytesIO(lote.excel_revision()))
     assert 'PERCEPCIONES' in wb.sheetnames
+
+
+def test_igv_tasa_reducida_va_en_AR(tmp_path):
+    """Restaurante MYPE al 10.5 %: AR = 10.50 (Contasis marca la casilla), alerta; una factura normal sigue con 18."""
+    from motor.excel_newcontasis import fila_newcontasis
+    base = (DATOS / '20100000002-01-F001-000777.xml').read_text(encoding='utf-8')
+    normal = Servicio(ruta_db=tmp_path / 'n.db')
+    normal.registrar_empresa('20611889683', 'ALQUMIN EIRL', plan_minimo())
+    pn = normal.procesar('20611889683', [('n.xml', base.encode())], cuenta_haber='1011', usar_ia=False).propuestas[0]
+    assert float(pn.c.igv_tasa) == 18.0 and fila_newcontasis(pn, '1011')[43] == 18.0
+    # mismo comprobante recalculado al 10.5 % (sin Percent en el XML: se deduce de IGV / base)
+    grav = pn.c.gravadas
+    igv = (grav * Decimal('0.105')).quantize(Decimal('0.01'))
+    xml = re.sub(r'<cbc:Percent>[^<]*</cbc:Percent>', '', base)
+    xml = xml.replace(f'>{pn.c.igv:.2f}<', f'>{igv:.2f}<').replace(f'>{pn.c.importe_total:.2f}<', f'>{grav + igv:.2f}<')
+    s = Servicio(ruta_db=tmp_path / 'r.db')
+    s.registrar_empresa('20611889683', 'ALQUMIN EIRL', plan_minimo())
+    p = s.procesar('20611889683', [('r.xml', xml.encode())], cuenta_haber='1011', usar_ia=False).propuestas[0]
+    assert float(p.c.igv_tasa) == 10.5
+    assert fila_newcontasis(p, '1011')[43] == 10.5
+    assert any('10.5%' in a for a in p.alertas)

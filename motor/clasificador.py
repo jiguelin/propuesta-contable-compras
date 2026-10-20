@@ -24,7 +24,7 @@ from .texto import normalizar
 from .plan_cuentas import Cuenta, PlanCuentas
 from .tipo_cambio import HistorialTC
 from .xml_parser import (Comprobante, RUCS_BANCOS, OPERACIONES_FINANCIERAS, RUCS_COMBUSTIBLE, RUCS_RESTAURANTES, RUCS_SEGUROS,
-                         RUCS_SERVICIOS_PUBLICOS, texto_items)
+                         RUCS_SERVICIOS_PUBLICOS, igv_reducido, texto_items)
 
 TIPOS_COMPRA = {'01', '03', '07', '08'}      # factura, boleta, NC, ND
 
@@ -440,6 +440,12 @@ def procesar_lote(comprobantes: list[Comprobante], ctx: Contexto) -> list[Propue
             p.alertas.append(f'Sujeta a detracción {c.detraccion_porcentaje}% (S/ {c.detraccion_monto}). Falta N° y fecha de constancia de depósito (no viene en el XML).')
         if c.tiene_percepcion:
             p.alertas.append(f'Con percepción S/ {c.percepcion_monto}.')
+        if igv_reducido(c):
+            if c.igv_tasa_mixta:
+                p.alertas.append(f'IGV con tasas distintas en los ítems (se usa {c.igv_tasa}%): revisar a mano la base y el IGV de cada tasa en Contasis.')
+            else:
+                p.alertas.append(f'IGV al {float(c.igv_tasa):g}% (no 18%): tasa reducida MYPE restaurante/hotel. La columna AR va con {float(c.igv_tasa):g}, así que '
+                                 f'Contasis marca sola la casilla "IGV {float(c.igv_tasa):g}%"; verificar en la línea 401111.')
         if c.tipo_codigo in ('07', '08'):
             p.alertas.append(f'{c.tipo_nombre.title()} que modifica {c.doc_referencia or "(sin referencia)"}: {c.motivo_referencia or ""}'.strip())
         if not c.igv and (c.exoneradas or c.inafectas):

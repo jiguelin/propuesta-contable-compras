@@ -205,6 +205,8 @@ class Comprobante:
     detraccion_monto: Decimal = Decimal(0)
     detraccion_cuenta: str = ''
     detraccion_medio: str = ''
+    igv_tasa: Decimal = Decimal(0)           # tasa del IGV del comprobante (18, 10.5…); 0 si no tiene IGV
+    igv_tasa_mixta: bool = False             # ítems con tasas distintas en el mismo comprobante
     tiene_percepcion: bool = False
     percepcion_monto: Decimal = Decimal(0)
     percepcion_porcentaje: Decimal = Decimal(0)
@@ -412,6 +414,7 @@ def parse_xml(path: Path) -> Comprobante:
         c.tiene_percepcion = True
 
     # --- Tributos globales ---
+    tasas_globales: list = []
     for ts in _all(root, './cac:TaxTotal/cac:TaxSubtotal'):
         nombre = _txt(ts, './cac:TaxCategory/cac:TaxScheme/cbc:Name').upper()
         tid = _txt(ts, './cac:TaxCategory/cac:TaxScheme/cbc:ID')
@@ -421,6 +424,9 @@ def parse_xml(path: Path) -> Comprobante:
             c.igv += monto
             if not c.gravadas:
                 c.gravadas = base
+            pct = _d(_txt(ts, './cac:TaxCategory/cbc:Percent'))
+            if pct and monto:
+                tasas_globales.append(pct)
         elif nombre == 'ISC' or tid == '2000':
             c.isc += monto
         elif nombre in ('ICBPER',) or tid == '7152':
@@ -457,6 +463,7 @@ def parse_xml(path: Path) -> Comprobante:
     c.tiene_igv = c.igv > 0
 
     # --- Líneas (InvoiceLine / CreditNoteLine / DebitNoteLine) ---
+    tasas_lineas: set = set()
     line_tag = {'Invoice': 'cac:InvoiceLine', 'CreditNote': 'cac:CreditNoteLine', 'DebitNote': 'cac:DebitNoteLine'}[raiz]
     qty_tag = {'Invoice': 'cbc:InvoicedQuantity', 'CreditNote': 'cbc:CreditedQuantity', 'DebitNote': 'cbc:DebitedQuantity'}[raiz]
     for ln in _all(root, f'./{line_tag}'):
@@ -496,6 +503,9 @@ def parse_xml(path: Path) -> Comprobante:
             if nombre == 'IGV' or tid == '1000':
                 L.igv += monto
                 L.afectacion = _txt(ts, './cac:TaxCategory/cbc:TaxExemptionReasonCode')
+                pct = _d(_txt(ts, './cac:TaxCategory/cbc:Percent'))
+                if pct and monto:
+                    tasas_lineas.add(pct.normalize())
             elif nombre == 'ISC' or tid == '2000':
                 L.isc += monto
             elif not L.afectacion:
@@ -506,7 +516,34 @@ def parse_xml(path: Path) -> Comprobante:
 
     if not c.gravadas and c.igv:
         c.gravadas = c.valor_venta
+    c.igv_tasa, c.igv_tasa_mixta = _tasa_igv(c, tasas_globales, tasas_lineas)
     return c
+
+
+def _tasa_igv(c, tasas_globales: list, tasas_lineas: set) -> tuple[Decimal, bool]:
+    """Tasa del IGV: la declarada en el XML (cabecera o ítems); si no viene, IGV / base gravada.
+    Las MYPE de restaurantes y hoteles (Ley 31556 y modificatorias) facturan con tasa reducida: 10 % en 2025, 10.5 % en 2026, 15 % en 2027."""
+    if not c.igv:
+        return Decimal(0), False
+    mixta = len(tasas_lineas) > 1
+    if len(set(t.normalize() for t in tasas_globales)) == 1:
+        tasa = tasas_globales[0]
+    elif len(tasas_lineas) == 1:
+        tasa = next(iter(tasas_lineas))
+    elif c.gravadas:
+        tasa = (c.igv / c.gravadas * 100).quantize(Decimal('0.01'))
+        for conocida in (Decimal(18), Decimal('10.5'), Decimal(10), Decimal(15), Decimal(8)):
+            if abs(tasa - conocida) <= Decimal('0.15'):   # redondeo de centavos
+                tasa = conocida
+                break
+    else:
+        tasa = Decimal(18)
+    return Decimal(tasa).quantize(Decimal('0.01')), mixta
+
+
+def igv_reducido(c) -> bool:
+    """True si el comprobante tiene IGV con una tasa distinta del 18 % (o tasas mezcladas)."""
+    return bool(c.igv) and (abs(c.igv_tasa - 18) > Decimal('0.3') or c.igv_tasa_mixta)
 
 
 

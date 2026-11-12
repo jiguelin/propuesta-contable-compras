@@ -18,6 +18,7 @@ from motor import __version__
 from motor.reglas import Regla
 from motor.texto import limpiar
 from motor.xml_parser import igv_reducido
+from motor.excel_entrada import es_de_excel
 from motor.servicio import Servicio
 
 st.set_page_config(page_title='Propuesta Contable de Compras', page_icon='📊', layout='wide')
@@ -119,10 +120,14 @@ with st.sidebar:
             st.caption('Sin historial. Funciona igual; con historial la primera propuesta es más precisa.')
         with st.expander('Agregar historial'):
             f = st.file_uploader('Diario analítico (Excel de NewContaSis) o tabla RUC + cuenta', type=['xlsx', 'xls'], key='hist_up')
+            st.caption('De preferencia el Diario detallado (con RUC) de los últimos meses. Cada mes se guarda aparte: el más reciente '
+                       'pesa más y volver a subir un mes lo reemplaza, no lo duplica.')
             if f and st.button('Cargar historial'):
                 try:
                     h = S.cargar_historial(ruc, f.read())
-                    st.success(f'{len(h.asientos)} asientos leídos. Cuenta del haber habitual: {h.cuenta_haber_habitual or "-"}.')
+                    _m = h.meses
+                    st.success(f'{len(h.asientos)} asientos leídos' + (f' ({_m[0]} a {_m[-1]}; lo más reciente pesa más)' if _m else '') +
+                               f'. Cuenta del haber habitual: {h.cuenta_haber_habitual or "-"}.')
                     st.rerun()
                 except Exception as ex:
                     st.error(str(ex))
@@ -210,7 +215,10 @@ if ss.get('ver_memoria'):
     with st.expander('Memoria de la empresa (proveedor + concepto → cuenta)', expanded=True):
         dfm = pd.DataFrame(S.db.memoria_completa(ruc))
         if not dfm.empty:
-            st.dataframe(dfm[['ruc_proveedor', 'concepto', 'cuenta', 'veces', 'origen', 'ultima']], use_container_width=True, hide_index=True)
+            st.caption('Peso = usos ponderados por antigüedad: el mes más reciente vale 1, el anterior 0.6, el otro 0.36… '
+                       'Gana la cuenta con más peso, así lo corregido en los últimos meses manda sobre lo antiguo.')
+            st.dataframe(dfm[['ruc_proveedor', 'concepto', 'cuenta', 'peso', 'veces', 'ultima', 'origen']].rename(columns={'ultima': 'último mes'}),
+                         use_container_width=True, hide_index=True)
         c1, c2 = st.columns(2)
         if c1.button('Cerrar'):
             ss.ver_memoria = False
@@ -260,8 +268,11 @@ with c3:
 if (cuenta_haber != emp['cuenta_haber'] or alerta_monto != emp['alerta_monto']) and cuenta_haber:
     S.db.guardar_empresa(ruc, emp['nombre'], cuenta_haber, alerta_monto)
 
-st.markdown('<div class="paso">XML del mes</div>', unsafe_allow_html=True)
-archivos = st.file_uploader('Arrastre los XML o un ZIP', type=['xml', 'zip'], accept_multiple_files=True, label_visibility='collapsed')
+st.markdown('<div class="paso">XML del mes (y el Excel del descargador, si faltan XML)</div>', unsafe_allow_html=True)
+archivos = st.file_uploader('Arrastre los XML, un ZIP y/o el Excel de compras', type=['xml', 'zip', 'xlsx'], accept_multiple_files=True,
+                            label_visibility='collapsed')
+st.caption('Si el descargador no trajo todos los XML, suba también su Excel (resultado_*.xlsx, formato de la plantilla A–AX). '
+           'Lo que llega por las dos vías no se duplica: manda el XML. Del Excel solo se agregan los comprobantes sin XML.')
 
 periodo = ''
 if archivos:
@@ -320,6 +331,12 @@ if n_glosa:
 if n_det_exc:
     st.warning(f'{n_det_exc} factura(s) con detracción quedaron FUERA del Excel por no tener constancia de depósito. Están en el filtro "Con detracción" y en la hoja EXCLUIDOS; cuando se pague la detracción, vuelva a generar con la constancia.')
 m[7].metric('Posible activo fijo', n_act)
+st.caption(lote.resumen_entrada)
+for _av in lote.avisos_entrada[:10]:
+    st.warning(_av)
+if lote.excel_completados:
+    st.info(f'{lote.excel_completados} comprobante(s) vinieron solo del Excel (sin XML): no traen ítems, así que la cuenta sale del '
+            'historial del proveedor o de su nombre. Revíselos con el filtro "Sin XML (Excel)".')
 n_red = sum(1 for p in lote.propuestas if p.estado in ('ok', 'revisar') and igv_reducido(p.c))
 if n_red:
     st.info(f'{n_red} factura(s) con IGV distinto del 18 % (restaurantes/hoteles MYPE). Van con su tasa real en la columna AR y Contasis '
@@ -330,12 +347,12 @@ if lote.constancias_sin_factura:
 
 st.markdown('<div class="paso">Revise y corrija la cuenta directamente en la tabla (doble clic en la celda "Cuenta")</div>', unsafe_allow_html=True)
 
-filtro = st.radio('Mostrar', ['Todos', 'Solo con observaciones', 'Solo 🔴/🟡', 'Con detracción', 'Posibles activos fijos', 'Glosa reparada', 'IGV ≠ 18%', 'Dólares', 'Excluidos'], horizontal=True, label_visibility='collapsed')
+filtro = st.radio('Mostrar', ['Todos', 'Solo con observaciones', 'Solo 🔴/🟡', 'Con detracción', 'Posibles activos fijos', 'Glosa reparada', 'IGV ≠ 18%', 'Sin XML (Excel)', 'Dólares', 'Excluidos'], horizontal=True, label_visibility='collapsed')
 
 
 def _fila(p):
     c = p.c
-    return {'id': p.id, '': p.semaforo, 'Conf.': p.confianza if p.estado in ('ok', 'revisar') else float('nan'), 'Fecha': c.fecha_emision,
+    return {'id': p.id, '': p.semaforo, 'Origen': 'Excel' if es_de_excel(c) else 'XML', 'Conf.': p.confianza if p.estado in ('ok', 'revisar') else float('nan'), 'Fecha': c.fecha_emision,
             'Comprobante': c.serie_numero or c.archivo[:30], 'Proveedor': c.nombre_emisor[:45] or (p.motivo[:45] if p.estado != 'ok' else ''), 'Mon.': c.moneda_codigo, 'Total': float(c.importe_total),
             'Descripción': (limpiar(c.lineas[0].descripcion, glosa_ascii, 60) + (' …' if len(c.lineas) > 1 else '')) if c.lineas else '',
             'TC': float(p.tc) if p.tc else float('nan'), 'Cuenta': p.cuenta, 'Cuenta (descripción)': p.cuenta_desc[:45], 'Fuente': p.fuente,
@@ -360,6 +377,8 @@ elif filtro == 'Glosa reparada':
     props = [p for p in props if p.glosa_revisar]
 elif filtro == 'IGV ≠ 18%':
     props = [p for p in props if p.estado in ('ok', 'revisar') and igv_reducido(p.c)]
+elif filtro == 'Sin XML (Excel)':
+    props = [p for p in props if es_de_excel(p.c)]
 elif filtro == 'Dólares':
     props = [p for p in props if p.estado in ('ok', 'revisar') and p.c.moneda_codigo != 'PEN']
 elif filtro == 'Excluidos':

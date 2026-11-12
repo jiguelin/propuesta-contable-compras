@@ -20,6 +20,7 @@ from datetime import datetime
 from . import pcge, reglas as kb
 from .clasificador import Contexto, Propuesta, procesar_lote, resumen
 from .detracciones import Constancia, cruzar, leer_constancias
+from .excel_entrada import clave, comprobante_desde_fila, es_de_excel, es_excel, leer_excel_compras
 from .excel_newcontasis import generar_excel_importacion, generar_excel_revision, importe_percepcion
 from .historial import ResumenHistorial, leer_historial_excel
 from .ia import crear_ia
@@ -30,19 +31,79 @@ from .tipo_cambio import leer_pdf_sunat, leer_tabla
 from .xml_parser import Comprobante, parse_xml_bytes
 
 
-def extraer_xml(archivos: list[tuple[str, bytes]]) -> list[tuple[str, bytes]]:
-    """Acepta .xml sueltos y .zip (con carpetas); devuelve [(nombre, bytes)] solo de XML."""
-    out = []
+def separar_archivos(archivos: list[tuple[str, bytes]]) -> tuple[list[tuple[str, bytes]], list[tuple[str, bytes]]]:
+    """Acepta .xml, .xlsx y .zip (con carpetas, que pueden traer XML y Excel). Devuelve (xmls, excels)."""
+    xmls, excels = [], []
+
+    def _uno(nombre: str, data: bytes):
+        base = nombre.split('/')[-1]
+        if nombre.startswith('__MACOSX') or base.startswith(('~$', '.')):
+            return
+        if base.lower().endswith('.xml'):
+            xmls.append((base, data))
+        elif es_excel(base):
+            excels.append((base, data))
+
     for nombre, data in archivos:
-        low = nombre.lower()
-        if low.endswith('.zip'):
+        if nombre.lower().endswith('.zip'):
             with zipfile.ZipFile(io.BytesIO(data)) as z:
                 for n in z.namelist():
-                    if n.lower().endswith('.xml') and not n.startswith('__MACOSX'):
-                        out.append((n.split('/')[-1], z.read(n)))
-        elif low.endswith('.xml'):
-            out.append((nombre, data))
-    return out
+                    if not n.endswith('/'):
+                        _uno(n, z.read(n))
+        else:
+            _uno(nombre, data)
+    return xmls, excels
+
+
+def extraer_xml(archivos: list[tuple[str, bytes]]) -> list[tuple[str, bytes]]:
+    """Acepta .xml sueltos y .zip (con carpetas); devuelve [(nombre, bytes)] solo de XML."""
+    return separar_archivos(archivos)[0]
+
+
+@dataclass
+class Entrada:
+    """Comprobantes del lote (XML + filas del Excel que no tienen XML) y cómo se combinaron."""
+    comprobantes: list[Comprobante]
+    n_xml: int = 0
+    n_excel: int = 0                 # filas leídas de los Excel
+    excel_cubiertos: int = 0         # filas que ya venían por XML (manda el XML)
+    excel_completados: int = 0       # filas sin XML que se agregaron
+    avisos: list[str] = field(default_factory=list)
+    filas_cubiertas: dict = field(default_factory=dict)   # clave → fila del Excel de un comprobante que vino por XML
+
+
+def leer_entrada(archivos: list[tuple[str, bytes]]) -> Entrada:
+    """XML + Excel del descargador. Si un comprobante llegó por las dos vías, MANDA EL XML (trae ítems, referencia
+    de la nota de crédito, detracción, percepción, tasa de IGV); del Excel solo se agregan los que faltan."""
+    xmls, excels = separar_archivos(archivos)
+    comps = [parse_xml_bytes(b, n) for n, b in xmls]
+    e = Entrada(comprobantes=comps, n_xml=len(xmls))
+    por_clave = {clave(c.ruc_emisor, c.tipo_codigo, c.serie_numero): c for c in comps if not c.error}
+    vistas = set()
+    for nombre, data in excels:
+        filas, avisos = leer_excel_compras(data, nombre)
+        e.avisos += avisos
+        if not filas and not avisos:
+            e.avisos.append(f'{nombre}: no encontré comprobantes (se espera la fecha en la columna A y el tipo en la C).')
+        for f in filas:
+            e.n_excel += 1
+            k = clave(f['ruc'], f['tipo'], f'{f["serie"]}-{f["numero"]}')
+            if k in vistas:
+                e.avisos.append(f'{nombre} fila {f["fila"]}: {f["serie"]}-{f["numero"]} de {f["ruc"]} está repetido en el Excel; se tomó una vez.')
+                continue
+            vistas.add(k)
+            cx = por_clave.get(k)
+            if cx is not None:
+                e.excel_cubiertos += 1
+                e.filas_cubiertas[k] = f
+                tot_excel = f['AC'] if cx.moneda_codigo == 'USD' and f['usd'] else f['S']
+                if cx.moneda_codigo == 'PEN' and abs(float(cx.importe_total) - tot_excel) > 0.05:
+                    cx.aviso_excel = (f'El Excel ({nombre} fila {f["fila"]}) trae total S/ {tot_excel:,.2f} y el XML '
+                                      f'S/ {float(cx.importe_total):,.2f}: se usó el XML; revise cuál es el correcto.')
+                continue
+            e.comprobantes.append(comprobante_desde_fila(f))
+            e.excel_completados += 1
+    return e
 
 
 @dataclass
@@ -59,6 +120,18 @@ class Lote:
     cuenta_percepcion: str = '40113'
     constancias_sin_factura: list = field(default_factory=list)
     n_constancias: int = 0
+    n_xml: int = 0
+    n_excel: int = 0
+    excel_cubiertos: int = 0
+    excel_completados: int = 0
+    avisos_entrada: list = field(default_factory=list)
+
+    @property
+    def resumen_entrada(self) -> str:
+        if not self.n_excel:
+            return f'XML: {self.n_xml}'
+        return (f'XML: {self.n_xml} · Excel: {self.n_excel} filas ({self.excel_cubiertos} ya estaban en los XML, '
+                f'{self.excel_completados} completados desde el Excel)')
 
     @property
     def resumen(self) -> dict:
@@ -86,6 +159,40 @@ class Lote:
             z.writestr(f'REVISION_{tag}.xlsx', self.excel_revision())
             z.writestr(f'REPORTE_REVISION_{tag}.txt', self.reporte_txt())
         return buf.getvalue()
+
+
+def _notas_del_excel(props: list[Propuesta], plan: PlanCuentas | None, glosa_ascii: bool = True):
+    """Notas de crédito/débito que vinieron del Excel sin documento de referencia ni ítems: se buscan en el lote las
+    facturas del mismo proveedor por el mismo importe. Se sugieren en la alerta (no se llenan X–AA: eso lo confirma
+    la persona) y, si todas usan la misma cuenta, la nota toma esa cuenta (revierte el mismo gasto)."""
+    for p in props:
+        c = p.c
+        if not (es_de_excel(c) and c.tipo_codigo in ('07', '08') and not c.doc_referencia and p.estado in ('ok', 'revisar')):
+            continue
+        cands = [q for q in props if q is not p and q.c.ruc_emisor == c.ruc_emisor and q.c.tipo_codigo in ('01', '03')
+                 and q.c.moneda_codigo == c.moneda_codigo and abs(float(q.c.importe_total) - float(c.importe_total)) <= 0.05
+                 and q.c.fecha_emision <= c.fecha_emision]
+        if not cands:
+            continue
+        cands.sort(key=lambda q: q.c.fecha_emision, reverse=True)
+        lista = ', '.join(f'{q.c.serie_numero} ({q.c.fecha_emision[8:10]}/{q.c.fecha_emision[5:7]})' for q in cands[:4])
+        p.alertas.append(f'Posible comprobante que modifica (mismo proveedor e importe): {lista}. Confírmelo con la nota.')
+        cuentas = {q.cuenta for q in cands if q.cuenta}
+        if len(cuentas) == 1 and p.fuente not in ('memoria', 'regla', 'manual'):
+            cuenta = cuentas.pop()
+            if cuenta != p.cuenta:
+                p.cuenta = cuenta
+                cu = plan.get(cuenta) if plan else None
+                p.cuenta_desc = cu.descripcion if cu else p.cuenta_desc
+                p.av = pcge.av_por_cuenta(cuenta)
+            p.fuente, p.confianza = 'nota', max(p.confianza, 85)
+            p.explicacion = f'Nota sin ítems: se usa la cuenta {cuenta} de la factura del mismo proveedor e importe ({cands[0].c.serie_numero}).'
+            if p.estado == 'revisar':
+                p.estado = 'ok'
+            if p.cuenta_desc:
+                from .texto import normalizar
+                pref = 'NOTA DE CREDITO' if c.tipo_codigo == '07' else 'NOTA DE DEBITO'
+                p.glosa, _ = normalizar(f'{pref} {p.cuenta_desc}', glosa_ascii, 60)
 
 
 class Servicio:
@@ -137,14 +244,18 @@ class Servicio:
     def cargar_historial(self, ruc: str, data: bytes) -> ResumenHistorial:
         h = leer_historial_excel(data)
         self.db.guardar_historial_stats(ruc, dict(h.frecuencia_cuentas), h.descripciones)
-        bloqueadas = set()
-        for ruc_prov, cnt in h.por_proveedor.items():
-            for cuenta, n in cnt.items():
-                if kb.cuenta_bloqueada(cuenta, self.db.reglas(ruc)):
+        bloqueadas, filas, meses = set(), [], set()
+        reglas = self.db.reglas(ruc)
+        for ruc_prov, cnt in h.por_proveedor_mes.items():
+            for (cuenta, mes), n in cnt.items():
+                if kb.cuenta_bloqueada(cuenta, reglas):
                     bloqueadas.add(cuenta)
                     continue
                 fam = pcge.familia_por_prefijo(cuenta)
-                self.db.aprender(ruc, ruc_prov, fam['prefijo'] if fam else cuenta[:3], cuenta, origen='historial', veces=n)
+                filas.append((ruc_prov, fam['prefijo'] if fam else cuenta[:3], cuenta, mes, n))
+                meses.add(mes)
+        # por mes: lo reciente pesa más (0.6 por cada mes atrás) y volver a subir un mes lo reemplaza, no lo duplica
+        self.db.reemplazar_historial(ruc, filas, meses)
         h.cuentas_bloqueadas = sorted(bloqueadas)
         if h.cuenta_haber_habitual:
             e = self.db.empresa(ruc)
@@ -171,8 +282,7 @@ class Servicio:
         """'YYYY-MM' → cantidad de comprobantes, para elegir el mes a trabajar antes de procesar."""
         from collections import Counter
         cnt = Counter()
-        for n, b in extraer_xml(archivos):
-            c = parse_xml_bytes(b, n)
+        for c in leer_entrada(archivos).comprobantes:
             if not c.error and c.fecha_emision:
                 cnt[c.fecha_emision[:7]] += 1
         return dict(sorted(cnt.items()))
@@ -189,7 +299,8 @@ class Servicio:
                        historial_stats=self.db.historial_stats(ruc), cuenta_haber=cuenta_haber, alerta_monto=alerta_monto,
                        excluir_bancos=excluir_bancos, ia=crear_ia(self.api_key) if usar_ia else None, umbral_ia=umbral_ia,
                        reglas=self.db.reglas(ruc), glosa_ascii=glosa_ascii)
-        comps = [parse_xml_bytes(b, n) for n, b in extraer_xml(archivos)]
+        entrada = leer_entrada(archivos)
+        comps = entrada.comprobantes
         comps.sort(key=lambda c: (c.fecha_emision, c.serie_numero))
         if not periodo:   # mes con más comprobantes
             from collections import Counter
@@ -200,7 +311,23 @@ class Servicio:
         props = procesar_lote(comps, ctx)
         lote = Lote(ruc=ruc, empresa=e['nombre'], periodo=periodo, cuenta_haber=cuenta_haber, propuestas=props,
                     alerta_monto=alerta_monto, tc_meses=ctx.tc.meses_cargados() if ctx.tc else [], usd_en_soles=usd_en_soles,
-                    cuenta_percepcion=(cuenta_percepcion or '').strip())
+                    cuenta_percepcion=(cuenta_percepcion or '').strip(), n_xml=entrada.n_xml, n_excel=entrada.n_excel,
+                    excel_cubiertos=entrada.excel_cubiertos, excel_completados=entrada.excel_completados,
+                    avisos_entrada=entrada.avisos)
+        for p in props:
+            c = p.c
+            if getattr(c, 'aviso_excel', ''):
+                p.alertas.append(c.aviso_excel)
+            # constancia de detracción que trae el Excel: para sus propias filas y para los XML que la tenían vacía
+            f = c.excel if es_de_excel(c) else entrada.filas_cubiertas.get(clave(c.ruc_emisor, c.tipo_codigo, c.serie_numero))
+            if f and f.get('det_constancia') and c.tiene_detraccion and not p.det_constancia:
+                p.det_constancia = f['det_constancia']
+                p.det_fecha = datetime.strptime(f['det_fecha'], '%Y-%m-%d').date() if f.get('det_fecha') else None
+            # dólares del Excel: su TC es el que cuadra con sus importes en soles
+            if es_de_excel(c) and c.moneda_codigo == 'USD' and f.get('tc', 0) > 1:
+                p.tc = f['tc']
+                p.alertas = [a for a in p.alertas if 'tipo de cambio' not in a.lower()]
+        _notas_del_excel(props, plan, glosa_ascii)
         if constancias:
             lista = leer_constancias(constancias)
             lote.n_constancias, lote.constancias_sin_factura = cruzar(props, lista)
@@ -246,7 +373,8 @@ class Servicio:
                 f'Se registró porque usted la escribió, pero no se guardará en la memoria.']
             aprender = False
         if aprender and cuenta and p.c.ruc_emisor:
-            self.db.aprender(lote.ruc, p.c.ruc_emisor, p.concepto or (pcge.familia_por_prefijo(cuenta) or {}).get('prefijo', cuenta[:3]), cuenta, origen='correccion')
+            self.db.aprender(lote.ruc, p.c.ruc_emisor, p.concepto or (pcge.familia_por_prefijo(cuenta) or {}).get('prefijo', cuenta[:3]), cuenta,
+                             origen='correccion', mes=lote.periodo)
         return p
 
     def corregir_glosa(self, lote: Lote, pid: str, glosa: str, ascii_estricto: bool = True):
@@ -266,4 +394,4 @@ class Servicio:
         for p in lote.propuestas:
             if p.estado == 'ok' and p.cuenta and p.c.ruc_emisor and p.fuente not in ('manual', 'regla') \
                     and not kb.cuenta_bloqueada(p.cuenta, self.db.reglas(lote.ruc)):
-                self.db.aprender(lote.ruc, p.c.ruc_emisor, p.concepto, p.cuenta, origen='confirmado')
+                self.db.aprender(lote.ruc, p.c.ruc_emisor, p.concepto, p.cuenta, origen='confirmado', mes=lote.periodo)

@@ -61,7 +61,12 @@ class ResumenHistorial:
     frecuencia_haber: Counter = field(default_factory=Counter)        # 4212/1011 → veces
     descripciones: dict = field(default_factory=dict)                 # cuenta → descripción
     cuentas_bloqueadas: list = field(default_factory=list)
-    por_proveedor: dict = field(default_factory=dict)                 # ruc → Counter(cuenta) (solo formato 2)
+    por_proveedor: dict = field(default_factory=dict)                 # ruc → Counter(cuenta)
+    por_proveedor_mes: dict = field(default_factory=dict)             # ruc → Counter((cuenta, 'YYYY-MM' o ''))
+
+    @property
+    def meses(self) -> list[str]:
+        return sorted({m for cnt in self.por_proveedor_mes.values() for (_, m) in cnt if m})
 
     @property
     def cuenta_haber_habitual(self) -> str | None:
@@ -93,6 +98,20 @@ def _num(v) -> float:
         return float(v or 0)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _mes(v) -> str:
+    """Fecha o periodo → 'YYYY-MM' ('' si no se entiende)."""
+    if isinstance(v, (datetime, date)):
+        return v.strftime('%Y-%m')
+    s = _limpio(v)
+    m = re.match(r'(\d{4})[-/]?(\d{2})', s) or None
+    if m and 1 <= int(m.group(2)) <= 12:
+        return f'{m.group(1)}-{m.group(2)}'
+    m = re.match(r'(\d{1,2})[/-](\d{1,2})[/-](\d{4})', s)
+    if m:
+        return f'{m.group(3)}-{int(m.group(2)):02d}'
+    return ''
 
 
 def leer_historial_excel(origen) -> ResumenHistorial:
@@ -181,8 +200,10 @@ def leer_historial_excel(origen) -> ResumenHistorial:
                 res.frecuencia_haber[h] += 1
             rucs = {l.get('ruc') for l in a.lineas if l.get('ruc')}
             if g and rucs:
+                mes = a.fecha.strftime('%Y-%m') if a.fecha else ''
                 for ruc in rucs:
                     res.por_proveedor.setdefault(ruc, Counter())[g] += 1
+                    res.por_proveedor_mes.setdefault(ruc, Counter())[(g, mes)] += 1
     else:   # ---- Formato 2: tabla plana RUC + cuenta ----
         import pandas as pd
         origen.seek(0) if hasattr(origen, 'seek') else None
@@ -190,11 +211,13 @@ def leer_historial_excel(origen) -> ResumenHistorial:
         cols = {str(c).strip().upper(): c for c in df.columns}
         c_ruc = next((cols[k] for k in cols if 'RUC' in k), None)
         c_cta = next((cols[k] for k in cols if 'CUENTA' in k), None)
+        c_fec = next((cols[k] for k in cols if k.startswith(('FECHA', 'MES', 'PERIODO'))), None)
         if c_ruc is None or c_cta is None:
             raise ValueError('No reconozco el formato: se esperaba un Diario Analítico (MES/FECHA/CUENTA/DEBE/HABER) o una tabla con columnas RUC y CUENTA.')
         for _, r in df.iterrows():
             ruc, cta = _limpio(r[c_ruc]), _limpio(r[c_cta]).split('.')[0]
             if re.fullmatch(r'\d{11}', ruc) and re.fullmatch(r'\d{2,12}', cta):
                 res.por_proveedor.setdefault(ruc, Counter())[cta] += 1
+                res.por_proveedor_mes.setdefault(ruc, Counter())[(cta, _mes(r[c_fec]) if c_fec is not None else '')] += 1
                 res.frecuencia_cuentas[cta] += 1
     return res

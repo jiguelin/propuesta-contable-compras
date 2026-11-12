@@ -31,6 +31,7 @@ from openpyxl.utils import get_column_letter
 from .clasificador import Propuesta
 from .texto import limpiar
 from .xml_parser import igv_reducido
+from .excel_entrada import es_de_excel
 
 CABECERAS = ['FECHA EMISION', 'FECHA VENC/PAGO', 'TIPO DOC', 'SERIE', 'AÑO DUA', 'NUMERO', 'TIPO DOC PROV', 'NUM DOC PROV', 'RAZON SOCIAL',
              'BASE IMP GRAV', 'IGV', 'BASE IMP MIXTA', 'IGV MIXTA', 'BASE IMP NO GRAV', 'IGV NO GRAV', 'VALOR NO GRAVADO', 'ISC', 'OTROS TRIBUTOS', 'IMPORTE TOTAL',
@@ -119,7 +120,7 @@ def fila_newcontasis(p: Propuesta, cuenta_haber: str, cuenta_icbper: str = '', c
         total = _n(total + perc_n)
         cta_otros = cuenta_percepcion
 
-    return [
+    fila = [
         f_emi, f_ven, c.tipo_codigo, serie, '', numero, tipo_prov, c.ruc_emisor[:11], limpiar(c.nombre_emisor, True, 60),   # A-I
         gravadas, igv, 0.0, 0.0, 0.0, 0.0, no_grav, isc, otros_trib, total,                                   # J-S
         '', p.det_constancia or '', constancia_fecha,                                                          # T-V  constancia de detracción (si se cargó)
@@ -132,6 +133,20 @@ def fila_newcontasis(p: Propuesta, cuenta_haber: str, cuenta_icbper: str = '', c
         '1' if c.tiene_percepcion else '', _n(Decimal(str(base_reg)) * k) if base_reg != '' else '',            # AT-AU
         p.av, _n(c.icbper) if c.icbper else '', (cuenta_icbper if c.icbper else ''),                            # AV-AX
     ]
+    if es_de_excel(c):
+        # Vino del Excel (sin XML): sus importes J–S en soles tal cual (en positivo), y en dólares su TC y su US$,
+        # que son los que cuadran entre sí. La referencia de la NC, si el Excel la trae, con su tipo y fecha.
+        x = c.excel
+        for j, col in enumerate('JKLMNOPQRS', start=9):
+            fila[j] = round(float(x[col]), 2)
+        if es_usd:
+            fila[22] = x['tc'] or tc
+            fila[28] = round(float(x['AC']), 2)
+            fila[46] = round(float(x['S']), 2) if base_reg != '' else ''
+        if c.tipo_codigo in ('07', '08') and (x['ref_serie'] or x['ref_numero']):
+            fila[23] = _f(x['ref_fecha']) if x['ref_fecha'] else None
+            fila[24] = x['ref_tipo'] or fila[24]
+    return fila
 
 
 FORMATOS = {1: 'dd/mm/yyyy', 2: 'dd/mm/yyyy', 22: 'dd/mm/yyyy', 23: '#,##0.0000', 24: 'dd/mm/yyyy', 30: 'dd/mm/yyyy', 42: 'dd/mm/yyyy'}
@@ -179,7 +194,7 @@ def generar_excel_revision(props: list[Propuesta], cuenta_haber: str, empresa: s
     ws.title = 'PROPUESTA'
     verde, amarillo, rojo, gris = 'C6EFCE', 'FFEB9C', 'FFC7CE', 'E7E6E6'
     cab = ['Semáforo', 'Confianza', 'Estado', 'Fecha', 'Tipo', 'Serie-Número', 'RUC', 'Proveedor', 'Moneda', 'Base', 'IGV', 'Total', 'TC',
-           'Cuenta', 'Descripción cuenta', 'Cuenta haber', 'Clasif. NCS', 'Fuente', 'Detracción', 'Constancia', 'Fecha depósito', 'Activo fijo?', 'Glosa', 'Alertas', 'Explicación', 'Archivo']
+           'Cuenta', 'Descripción cuenta', 'Cuenta haber', 'Clasif. NCS', 'Fuente', 'Detracción', 'Constancia', 'Fecha depósito', 'Activo fijo?', 'Glosa', 'Alertas', 'Explicación', 'Origen', 'Archivo']
     ws.append([f'{empresa} — Propuesta contable de compras — {periodo}'])
     ws['A1'].font = Font(bold=True, size=13)
     ws.append([])
@@ -193,12 +208,13 @@ def generar_excel_revision(props: list[Propuesta], cuenta_haber: str, empresa: s
                 c.fecha_emision, c.tipo_codigo, c.serie_numero, c.ruc_emisor, c.nombre_emisor, c.moneda_codigo, _n(c.gravadas) or _n(c.valor_venta), _n(c.igv), _n(c.importe_total),
                 p.tc if p.tc else '', p.cuenta, p.cuenta_desc, cuenta_haber if p.cuenta else '', p.av if p.cuenta else '', p.fuente,
                 f'{c.detraccion_porcentaje}% S/ {c.detraccion_monto}' if c.tiene_detraccion else '', p.det_constancia, p.det_fecha.strftime('%d/%m/%Y') if p.det_fecha else '',
-                'SÍ' if p.posible_activo else '', p.glosa, ' | '.join(p.alertas), p.explicacion, c.archivo]
+                'SÍ' if p.posible_activo else '', p.glosa, ' | '.join(p.alertas), p.explicacion,
+                'Excel' if es_de_excel(c) else 'XML', c.archivo]
         ws.append(fila)
         color = {'🟢': verde, '🟡': amarillo, '🔴': rojo, '⚪': gris}[p.semaforo]
         for cell in ws[ws.max_row][:3]:
             cell.fill = PatternFill('solid', fgColor=color)
-    anchos = [9, 10, 22, 11, 6, 16, 13, 36, 8, 11, 10, 11, 8, 11, 40, 11, 9, 10, 16, 12, 12, 10, 40, 60, 60, 30]
+    anchos = [9, 10, 22, 11, 6, 16, 13, 36, 8, 11, 10, 11, 8, 11, 40, 11, 9, 10, 16, 12, 12, 10, 40, 60, 60, 8, 30]
     for j, w in enumerate(anchos, start=1):
         ws.column_dimensions[get_column_letter(j)].width = w
     ws.freeze_panes = 'A4'

@@ -312,7 +312,8 @@ def procesar_lote(comprobantes: list[Comprobante], ctx: Contexto) -> list[Propue
             m = memo_ok[0]
             p.cuenta, p.fuente = m['cuenta'], 'memoria'
             p.confianza = min(99, 92 + min(m['veces'], 7))
-            p.explicacion = f'Proveedor + concepto "{p.familia_nombre}" ya contabilizado {m["veces"]} vez/veces en {m["cuenta"]}. {expl}.'
+            p.explicacion = (f'Proveedor + concepto "{p.familia_nombre}" ya contabilizado {m["veces"]} vez/veces en {m["cuenta"]}'
+                             + (f' (último uso {m["ultima"]})' if m.get('ultima') else '') + f'. {expl}.')
         elif memo_otro and fuerza <= 1:
             # la descripción no dio pista fuerte: manda lo que se hizo antes con este proveedor
             m = memo_otro[0]
@@ -446,11 +447,21 @@ def procesar_lote(comprobantes: list[Comprobante], ctx: Contexto) -> list[Propue
             else:
                 p.alertas.append(f'IGV al {float(c.igv_tasa):g}% (no 18%): tasa reducida MYPE restaurante/hotel. La columna AR va con {float(c.igv_tasa):g}, así que '
                                  f'Contasis marca sola la casilla "IGV {float(c.igv_tasa):g}%"; verificar en la línea 401111.')
-        if c.tipo_codigo in ('07', '08'):
+        if c.tipo_codigo in ('07', '08') and (c.doc_referencia or getattr(c, 'origen', 'xml') == 'xml'):
             p.alertas.append(f'{c.tipo_nombre.title()} que modifica {c.doc_referencia or "(sin referencia)"}: {c.motivo_referencia or ""}'.strip())
         if not c.igv and (c.exoneradas or c.inafectas):
             p.alertas.append('Operación exonerada/inafecta (sin IGV).')
-        if not c.lineas:
+        if getattr(c, 'origen', 'xml') == 'excel':
+            p.alertas.append(f'Sin XML: viene del Excel ({c.archivo}). No trae ítems, así que la cuenta sale del historial del '
+                             'proveedor o de su nombre; revísela con el documento.')
+            if c.tipo_codigo in ('07', '08') and not c.doc_referencia:
+                p.alertas.append(f'{c.tipo_nombre.title()} sin documento de referencia en el Excel: complete en Contasis el '
+                                 'comprobante que modifica (fecha, tipo, serie y número), o suba su XML.')
+            if p.cuenta_desc:                                  # sin ítems: glosa con la descripción de la cuenta
+                p.glosa, _ = normalizar(f'{_glosa(c)} {p.cuenta_desc}', ctx.glosa_ascii, 60)
+            if p.fuente not in ('memoria', 'regla', 'manual') and p.estado == 'ok':
+                p.confianza = min(p.confianza, VERDE - 1)      # sin ítems ni historial del proveedor: al menos 🟡
+        elif not c.lineas:
             p.alertas.append('El XML no trae detalle de ítems.')
         if pcge.parece_financiera(c.nombre_emisor) and c.ruc_emisor not in RUCS_BANCOS:
             p.alertas.append(f'El emisor parece una entidad financiera ({c.nombre_emisor[:40]}) pero su RUC no está en la '

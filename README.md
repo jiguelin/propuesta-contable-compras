@@ -141,6 +141,26 @@ Sin API key la app funciona igual (solo reglas + plan + memoria).
 - Además: alerta por factura, filtro "IGV ≠ 18%", columna "IGV %" en la tabla y hoja **IGV DISTINTO 18%** en el Excel de
   revisión. Si una factura mezcla tasas en sus ítems, se avisa para revisarla a mano.
 
+## Novedades v0.3.5
+
+- **Excel de compras junto con los XML** (cuando el descargador no trae todos los XML): se sube el `resultado_*.xlsx`
+  (formato de la plantilla A–AX, también dentro del ZIP) junto con los XML. Clave: RUC + tipo + serie + número (sin ceros
+  a la izquierda). Si un comprobante llega por las dos vías **manda el XML** (trae ítems, referencia de la NC, detracción,
+  percepción, tasa del IGV) y, si el total del Excel es distinto, se avisa. Del Excel solo entran los que no tienen XML:
+  importes en soles tal cual (las NC en negativo se leen en positivo), dólares si AC tiene valor (con su TC de W),
+  crédito si vence después de la emisión, constancia de detracción de U/V (también completa la de un XML que no la tenía).
+- Pantalla: resumen "XML: n · Excel: m (k ya estaban, j completados)", columna **Origen**, filtro **"Sin XML (Excel)"**.
+  En el Excel de revisión, columna Origen.
+- Filas del Excel: alerta de que no traen ítems (la cuenta sale del historial del proveedor o de su nombre; si no viene de
+  la memoria queda al menos en 🟡); glosa con la descripción de la cuenta.
+- **Notas de crédito del Excel sin referencia** (X–AA vacías): alerta para completar el comprobante que modifican y
+  sugerencia de la factura del mismo proveedor e importe en el lote; si todas usan la misma cuenta, la nota la toma.
+- **Historial con más peso a lo reciente** (como el app de Ralumin): la memoria proveedor + concepto se guarda por mes y
+  pesa 0.6 por cada mes atrás (último mes 1, anterior 0.6, 0.36…). Gana la cuenta con más peso, así lo corregido en los
+  últimos meses manda sobre un error antiguo y repetido. El Diario se guarda por mes: volver a subir un mes lo reemplaza,
+  no lo duplica. Correcciones y confirmaciones cuentan en el mes del lote. Lo aprendido antes se migra al mes de su último
+  uso. Las reglas contables siguen mandando sobre la memoria.
+
 ## Hoja de ruta
 
 - **v0.1 (esta)**: flujo completo XML → Excel + reporte, memoria por proveedor+concepto, TC, detracción, IA opcional.

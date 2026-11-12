@@ -173,6 +173,10 @@ class Comprobante:
     direccion_cliente: str = ''
     # referencias
     orden_compra: str = ''
+    # origen: 'xml' o 'excel' (fila del Excel del descargador, cuando falta el XML); `excel` guarda la fila tal cual
+    origen: str = 'xml'
+    excel: dict = field(default_factory=dict)
+    aviso_excel: str = ''          # el Excel trae otro total para este mismo comprobante
     doc_referencia: str = ''      # NC/ND: comprobante afectado
     motivo_referencia: str = ''
     guias: List[str] = field(default_factory=list)

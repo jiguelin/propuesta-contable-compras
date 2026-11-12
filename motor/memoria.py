@@ -30,6 +30,9 @@ CREATE TABLE IF NOT EXISTS tipo_cambio (
 CREATE TABLE IF NOT EXISTS aprendizaje (
     ruc TEXT, ruc_proveedor TEXT, concepto TEXT, cuenta TEXT, veces INTEGER DEFAULT 1,
     origen TEXT, ultima TEXT, PRIMARY KEY (ruc, ruc_proveedor, concepto, cuenta));
+CREATE TABLE IF NOT EXISTS aprendizaje_mes (
+    ruc TEXT, ruc_proveedor TEXT, concepto TEXT, cuenta TEXT, mes TEXT, origen TEXT, veces REAL DEFAULT 1,
+    PRIMARY KEY (ruc, ruc_proveedor, concepto, cuenta, mes, origen));
 CREATE TABLE IF NOT EXISTS historial_stats (
     ruc TEXT, cuenta TEXT, veces INTEGER, descripcion TEXT, PRIMARY KEY (ruc, cuenta));
 CREATE TABLE IF NOT EXISTS reglas (
@@ -50,6 +53,17 @@ class Memoria:
         self.cx = sqlite3.connect(self.ruta, check_same_thread=False)
         self.cx.row_factory = sqlite3.Row
         self.cx.executescript(SCHEMA)
+        self._migrar_aprendizaje_mes()
+
+    def _migrar_aprendizaje_mes(self):
+        """v0.3.5: la memoria pasa a guardarse por mes (para que lo reciente pese más). Lo aprendido antes se lleva
+        al mes de su último uso."""
+        if self.cx.execute('SELECT COUNT(*) FROM aprendizaje_mes').fetchone()[0]:
+            return
+        self.cx.execute("""INSERT OR IGNORE INTO aprendizaje_mes(ruc,ruc_proveedor,concepto,cuenta,mes,origen,veces)
+                           SELECT ruc,ruc_proveedor,concepto,cuenta,substr(COALESCE(ultima,''),1,7),COALESCE(origen,''),veces
+                           FROM aprendizaje""")
+        self.cx.commit()
 
     # ---------------- empresas ----------------
     def empresas(self) -> list[dict]:
@@ -68,7 +82,7 @@ class Memoria:
         self.cx.commit()
 
     def eliminar_empresa(self, ruc: str):
-        for t in ('plan_cuentas', 'aprendizaje', 'historial_stats', 'lotes', 'empresas'):
+        for t in ('plan_cuentas', 'aprendizaje', 'aprendizaje_mes', 'historial_stats', 'lotes', 'empresas'):
             self.cx.execute(f'DELETE FROM {t} WHERE ruc=?', (ruc,))
         self.cx.commit()
 
@@ -104,26 +118,89 @@ class Memoria:
                             for r in self.cx.execute('SELECT * FROM tipo_cambio')])
 
     # ---------------- aprendizaje (memoria proveedor + concepto) ----------------
-    def aprender(self, ruc: str, ruc_proveedor: str, concepto: str, cuenta: str, origen: str = 'correccion', veces: int = 1):
+    # Cada uso se guarda con su MES. Al consultar, lo reciente pesa más: el mes más reciente de la empresa vale 1,
+    # el anterior 0.6, el otro 0.36… (PESO_MES ** meses atrás), como en el app de Ralumin. Así, si un proveedor se
+    # registró mal mucho tiempo y en los últimos meses se corrigió, gana lo corregido. Las reglas contables siguen
+    # mandando sobre la memoria (eso lo decide el clasificador).
+    PESO_MES = 0.6
+    PESO_SIN_FECHA = 0.1
+
+    def aprender(self, ruc: str, ruc_proveedor: str, concepto: str, cuenta: str, origen: str = 'correccion', veces: float = 1,
+                 mes: str | None = None):
         now = datetime.now().isoformat(timespec='seconds')
+        mes = (mes if mes is not None else now[:7])[:7]
         self.cx.execute("""INSERT INTO aprendizaje(ruc,ruc_proveedor,concepto,cuenta,veces,origen,ultima) VALUES(?,?,?,?,?,?,?)
                            ON CONFLICT(ruc,ruc_proveedor,concepto,cuenta) DO UPDATE SET veces=veces+excluded.veces, ultima=excluded.ultima, origen=excluded.origen""",
-                        (ruc, ruc_proveedor, concepto, cuenta, veces, origen, now))
+                        (ruc, ruc_proveedor, concepto, cuenta, int(round(veces)) or 1, origen, now))
+        self.cx.execute("""INSERT INTO aprendizaje_mes(ruc,ruc_proveedor,concepto,cuenta,mes,origen,veces) VALUES(?,?,?,?,?,?,?)
+                           ON CONFLICT(ruc,ruc_proveedor,concepto,cuenta,mes,origen) DO UPDATE SET veces=veces+excluded.veces""",
+                        (ruc, ruc_proveedor, concepto, cuenta, mes, origen, veces))
         self.cx.commit()
 
+    def reemplazar_historial(self, ruc: str, filas: list[tuple], meses: set[str]):
+        """Carga del Diario: [(ruc_proveedor, concepto, cuenta, mes, veces)]. Reemplaza lo que había del historial en
+        esos meses, así volver a subir el mismo Diario (o uno corregido) no duplica."""
+        for mes in meses:
+            self.cx.execute("DELETE FROM aprendizaje_mes WHERE ruc=? AND origen='historial' AND mes=?", (ruc, mes))
+        self.cx.executemany("""INSERT INTO aprendizaje_mes(ruc,ruc_proveedor,concepto,cuenta,mes,origen,veces) VALUES(?,?,?,?,?,'historial',?)
+                               ON CONFLICT(ruc,ruc_proveedor,concepto,cuenta,mes,origen) DO UPDATE SET veces=veces+excluded.veces""",
+                            [(ruc, rp, co, cu, me, n) for rp, co, cu, me, n in filas])
+        now = datetime.now().isoformat(timespec='seconds')
+        self.cx.executemany("""INSERT INTO aprendizaje(ruc,ruc_proveedor,concepto,cuenta,veces,origen,ultima) VALUES(?,?,?,?,?,'historial',?)
+                               ON CONFLICT(ruc,ruc_proveedor,concepto,cuenta) DO UPDATE SET ultima=excluded.ultima""",
+                            [(ruc, rp, co, cu, int(n), now) for rp, co, cu, me, n in filas])
+        self.cx.commit()
+
+    def mes_referencia(self, ruc: str) -> str:
+        r = self.cx.execute("SELECT MAX(mes) FROM aprendizaje_mes WHERE ruc=? AND mes<>''", (ruc,)).fetchone()
+        return r[0] or ''
+
+    @classmethod
+    def peso(cls, mes: str, mes_ref: str) -> float:
+        if not mes or not mes_ref:
+            return cls.PESO_SIN_FECHA if mes_ref else 1.0
+        try:
+            atras = (int(mes_ref[:4]) * 12 + int(mes_ref[5:7])) - (int(mes[:4]) * 12 + int(mes[5:7]))
+        except ValueError:
+            return cls.PESO_SIN_FECHA
+        return cls.PESO_MES ** max(atras, 0)
+
+    def _agregado(self, ruc: str, ruc_proveedor: str | None = None) -> list[dict]:
+        mes_ref = self.mes_referencia(ruc)
+        q = 'SELECT ruc_proveedor,concepto,cuenta,mes,origen,veces FROM aprendizaje_mes WHERE ruc=?'
+        args = [ruc]
+        if ruc_proveedor is not None:
+            q += ' AND ruc_proveedor=?'
+            args.append(ruc_proveedor)
+        acc: dict = {}
+        for r in self.cx.execute(q, args):
+            k = (r['ruc_proveedor'], r['concepto'], r['cuenta'])
+            a = acc.setdefault(k, {'ruc_proveedor': k[0], 'concepto': k[1], 'cuenta': k[2], 'veces': 0.0, 'peso': 0.0,
+                                   'ultima': '', 'origen': ''})
+            a['veces'] += r['veces']
+            a['peso'] += r['veces'] * self.peso(r['mes'], mes_ref)
+            if r['mes'] >= a['ultima']:
+                a['ultima'], a['origen'] = r['mes'], r['origen']
+        out = []
+        for a in acc.values():
+            a['veces'] = int(round(a['veces'])) or 1
+            a['peso'] = round(a['peso'], 3)
+            out.append(a)
+        return out
+
     def memoria_proveedor(self, ruc: str, ruc_proveedor: str) -> list[dict]:
-        """[{concepto, cuenta, veces, origen}] ordenado por veces desc."""
-        return [dict(r) for r in self.cx.execute(
-            'SELECT concepto,cuenta,veces,origen,ultima FROM aprendizaje WHERE ruc=? AND ruc_proveedor=? ORDER BY veces DESC', (ruc, ruc_proveedor))]
+        """[{concepto, cuenta, veces, peso, ultima (mes), origen}] ordenado por PESO (lo reciente primero), luego veces."""
+        return sorted(self._agregado(ruc, ruc_proveedor), key=lambda a: (-a['peso'], -a['veces'], a['cuenta']))
 
     def memoria_completa(self, ruc: str) -> list[dict]:
-        return [dict(r) for r in self.cx.execute('SELECT * FROM aprendizaje WHERE ruc=? ORDER BY ruc_proveedor, veces DESC', (ruc,))]
+        return sorted(self._agregado(ruc), key=lambda a: (a['ruc_proveedor'], -a['peso'], -a['veces']))
 
     def olvidar(self, ruc: str, ruc_proveedor: str | None = None):
-        if ruc_proveedor:
-            self.cx.execute('DELETE FROM aprendizaje WHERE ruc=? AND ruc_proveedor=?', (ruc, ruc_proveedor))
-        else:
-            self.cx.execute('DELETE FROM aprendizaje WHERE ruc=?', (ruc,))
+        for t in ('aprendizaje', 'aprendizaje_mes'):
+            if ruc_proveedor:
+                self.cx.execute(f'DELETE FROM {t} WHERE ruc=? AND ruc_proveedor=?', (ruc, ruc_proveedor))
+            else:
+                self.cx.execute(f'DELETE FROM {t} WHERE ruc=?', (ruc,))
         self.cx.commit()
 
     # ---------------- historial (estadísticas de cuentas usadas) ----------------

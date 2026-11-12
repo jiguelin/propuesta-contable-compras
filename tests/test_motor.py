@@ -213,3 +213,73 @@ def test_igv_tasa_reducida_va_en_AR(tmp_path):
     assert float(p.c.igv_tasa) == 10.5
     assert fila_newcontasis(p, '1011')[43] == 10.5
     assert any('10.5%' in a for a in p.alertas)
+
+
+def _excel_descargador(filas: list[list]) -> bytes:
+    """Excel como el resultado_*.xlsx del descargador: hoja Comprobantes, cabeceras arriba, datos desde la fila 4 (A–AX)."""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = 'Comprobantes'
+    ws.append(['REGISTRO DE COMPRAS'])
+    ws.append([])
+    ws.append(['Fecha', 'Venc', 'Tipo', 'Serie', 'Año', 'Número', 'TipoDoc', 'RUC', 'Razón social', 'Base', 'IGV'])
+    for f in filas:
+        r = [None] * 50
+        for col, v in f.items():
+            r[openpyxl.utils.column_index_from_string(col) - 1] = v
+        ws.append(r)
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def test_excel_completa_los_xml_que_faltan_sin_duplicar(tmp_path):
+    """XML + Excel: lo que está en los dos no se duplica (manda el XML); del Excel entran los que faltan; NC en positivo."""
+    from datetime import datetime as dt
+    from motor.excel_newcontasis import fila_newcontasis
+    xml = (DATOS / '20100000002-01-F001-000777.xml').read_bytes()
+    excel = _excel_descargador([
+        # el mismo comprobante del XML (número con ceros distintos, total distinto → aviso)
+        {'A': dt(2026, 5, 17), 'C': '01', 'D': 'F001', 'F': '777', 'G': '6', 'H': '20100000002', 'I': 'TIENDAS TECNO SAC',
+         'J': 3000, 'K': 540, 'S': 3545, 'W': 1},
+        # factura sin XML
+        {'A': dt(2026, 5, 20), 'C': '01', 'D': 'E001', 'F': '55', 'G': '6', 'H': '20100000002', 'I': 'TIENDAS TECNO SAC',
+         'J': 500, 'K': 90, 'S': 590, 'W': 1},
+        # nota de crédito sin XML, en negativo y sin referencia
+        {'A': dt(2026, 5, 22), 'C': '07', 'D': 'E001', 'F': '9', 'G': '6', 'H': '20100000002', 'I': 'TIENDAS TECNO SAC',
+         'J': -500, 'K': -90, 'S': -590, 'W': 1},
+    ])
+    s = Servicio(ruta_db=tmp_path / 'p.db')
+    s.registrar_empresa('20611889683', 'ALQUMIN EIRL', plan_minimo())
+    lote = s.procesar('20611889683', [('a.xml', xml), ('resultado_x.xlsx', excel)], cuenta_haber='4212', usar_ia=False)
+    assert (lote.n_xml, lote.n_excel, lote.excel_cubiertos, lote.excel_completados) == (1, 3, 1, 2)
+    por_num = {p.c.serie_numero: p for p in lote.propuestas}
+    assert len(lote.propuestas) == 3
+    assert por_num['F001-000777'].c.origen == 'xml'
+    assert any('Excel' in a and '3,545.00' in a for a in por_num['F001-000777'].alertas)
+    fac, nc = por_num['E001-55'], por_num['E001-9']
+    assert fac.c.origen == nc.c.origen == 'excel'
+    assert float(nc.c.importe_total) == 590.0 and float(nc.c.igv) == 90.0
+    f = fila_newcontasis(nc, '4212')
+    assert f[2] == '07' and f[9] == 500.0 and f[10] == 90.0 and f[18] == 590.0
+    assert any('sin documento de referencia' in a for a in nc.alertas)
+    assert any('E001-55' in a for a in nc.alertas)              # posible factura que modifica
+    assert nc.cuenta == fac.cuenta
+    assert Servicio.meses_en_archivos([('a.xml', xml), ('resultado_x.xlsx', excel)]) == {'2026-05': 3}
+
+
+def test_memoria_lo_reciente_pesa_mas(tmp_path):
+    """Un proveedor registrado mucho tiempo en una cuenta y corregido el último mes: gana lo reciente."""
+    s = Servicio(ruta_db=tmp_path / 'p.db')
+    s.registrar_empresa('20611889683', 'ALQUMIN EIRL', plan_minimo())
+    for mes in ('2026-05', '2026-06', '2026-07'):
+        s.db.aprender('20611889683', '20999999999', '656', '6560094', origen='historial', veces=2, mes=mes)
+    s.db.aprender('20611889683', '20999999999', '656', '6343094', origen='historial', veces=2, mes='2026-10')
+    m = s.db.memoria_proveedor('20611889683', '20999999999')
+    assert m[0]['cuenta'] == '6343094' and m[0]['ultima'] == '2026-10'
+    assert m[1]['veces'] == 6                                   # más usos, pero antiguos
+    # volver a subir el mismo Diario no duplica
+    filas = [('20888888888', '656', '6560094', '2026-09', 3)]
+    s.db.reemplazar_historial('20611889683', filas, {'2026-09'})
+    s.db.reemplazar_historial('20611889683', filas, {'2026-09'})
+    assert s.db.memoria_proveedor('20611889683', '20888888888')[0]['veces'] == 3

@@ -84,7 +84,7 @@ Sin API key la app funciona igual (solo reglas + plan + memoria).
 
 ## Novedades v0.2.0
 
-- **Dólares**: las columnas J–S del Excel van en **soles** (importe × TC venta SUNAT de la fecha de emisión), W = TC y AC = importe original en USD. Así NewContaSis muestra el mismo importe en dólares que la factura.
+- **Dólares**: las columnas J–S del Excel van **en dólares**, tal como vienen en el XML; AB = `D`, W = TC venta SUNAT de la fecha de emisión y AC = total en USD. NewContaSis convierte a soles con el TC. (Hasta la v0.3.4 se enviaban ya convertidos a soles y NewContaSis los volvía a multiplicar por el TC.)
 - **TC en todas las filas** (soles y dólares), según la fecha de emisión. Se pueden subir varios PDF de meses distintos a la vez; el historial se acumula.
 - **Mes a trabajar**: al subir los XML se elige el mes; todo comprobante de otro mes se excluye del Excel (queda en EXCLUIDOS y en el reporte).
 - **Constancias de detracción (opcional)**: TXT/CSV/Excel de SUNAT o PDF individuales (o ZIP). Se cruzan por RUC + serie + número y llenan U/V y AO/AP solo en las facturas afectas. Lo que no cruza se informa. Filtro "Con detracción" en la tabla.
@@ -151,7 +151,7 @@ Sin API key la app funciona igual (solo reglas + plan + memoria).
 
 Estos campos se llenaron según la plantilla y su documentación interna, pero **nunca se ha importado un mes real todavía**:
 
-- Importes (J–S) en **soles** (USD convertidos con el TC venta de la fecha), W = tipo de cambio, AC = total en USD cuando la moneda es D. Si se comprueba que NewContaSis los espera en dólares, basta `usd_en_soles=False` en `Servicio.procesar`.
+- Importes (J–S) en la **moneda del comprobante**: dólares en dólares (AB = D), W = tipo de cambio, AC = total en USD. La conversión a soles la hace NewContaSis. `usd_en_soles=True` en `Servicio.procesar` queda solo como opción heredada.
 - Columnas L/M/N/O (gravadas mixtas / destinadas a no gravadas) en 0: todas las compras se tratan como destinadas a operaciones gravadas.
 - B y AD (vencimiento) = fecha de vencimiento del XML o, si no trae, la de emisión.
 - AG (cuenta otros tributos) = misma cuenta del gasto cuando hay otros cargos.

@@ -68,7 +68,7 @@ def importe_percepcion(p: Propuesta, cuenta_percepcion: str) -> Decimal:
     return Decimal(str(c.percepcion_monto))
 
 
-def fila_newcontasis(p: Propuesta, cuenta_haber: str, cuenta_icbper: str = '', cuenta_otros_tributos: str = '', usd_en_soles: bool = True,
+def fila_newcontasis(p: Propuesta, cuenta_haber: str, cuenta_icbper: str = '', cuenta_otros_tributos: str = '', usd_en_soles: bool = False,
                      cuenta_percepcion: str = '') -> list:
     c = p.c
     serie, numero = _serie_numero(c.serie_numero)
@@ -89,8 +89,10 @@ def fila_newcontasis(p: Propuesta, cuenta_haber: str, cuenta_icbper: str = '', c
     elif c.tiene_retencion:
         regimen, imp, base_reg = 3, _n(c.retencion_monto), _n(c.importe_total)
 
-    # NewContaSis lee los importes J–S en SOLES; para documentos en dólares se convierten con el TC de la fecha
-    # y el importe original en dólares va en AC (equivalente en USD). Si usd_en_soles=False se dejan en la moneda original.
+    # Comprobantes en dólares: los importes J–S van EN DÓLARES, como vienen en el XML; AB = 'D', W = TC y
+    # AC = total en USD. NewContaSis convierte a soles con el TC de W. Si se enviaran ya convertidos a soles con
+    # moneda D, NewContaSis los volvería a multiplicar por el TC (error detectado en RALUMIN, noviembre 2026).
+    # usd_en_soles=True queda solo como opción heredada.
     tc = p.tc if p.tc else ''                          # W = TC venta SUNAT de la fecha (soles y dólares); sin TC cargado queda en blanco y se avisa
     k = Decimal(str(tc)) if (es_usd and usd_en_soles and p.tc) else Decimal(1)
     no_grav = _n((c.exoneradas + c.inafectas) * k)
@@ -151,7 +153,7 @@ def _escribir_filas(ws, filas, inicio=1):
                 cell.number_format = '@'
 
 
-def generar_excel_importacion(props: list[Propuesta], cuenta_haber: str, cuenta_icbper: str = '', con_cabecera: bool = False, usd_en_soles: bool = True,
+def generar_excel_importacion(props: list[Propuesta], cuenta_haber: str, cuenta_icbper: str = '', con_cabecera: bool = False, usd_en_soles: bool = False,
                               cuenta_percepcion: str = '') -> bytes:
     """Excel listo para importar: solo filas de datos (o con cabecera de referencia si con_cabecera)."""
     wb = Workbook()
@@ -171,7 +173,7 @@ def generar_excel_importacion(props: list[Propuesta], cuenta_haber: str, cuenta_
     return buf.getvalue()
 
 
-def generar_excel_revision(props: list[Propuesta], cuenta_haber: str, empresa: str, periodo: str, usd_en_soles: bool = True,
+def generar_excel_revision(props: list[Propuesta], cuenta_haber: str, empresa: str, periodo: str, usd_en_soles: bool = False,
                            cuenta_percepcion: str = '') -> bytes:
     """Excel amigable: hoja PROPUESTA (todas las filas con semáforo), REVISAR, EXCLUIDOS, y NEWCONTASIS (con cabecera)."""
     wb = Workbook()

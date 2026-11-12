@@ -55,7 +55,7 @@ class Lote:
     alerta_monto: float
     tc_meses: list[str] = field(default_factory=list)
     generado: datetime = field(default_factory=datetime.now)
-    usd_en_soles: bool = True
+    usd_en_soles: bool = False
     cuenta_percepcion: str = '40113'
     constancias_sin_factura: list = field(default_factory=list)
     n_constancias: int = 0
@@ -179,7 +179,7 @@ class Servicio:
 
     def procesar(self, ruc: str, archivos: list[tuple[str, bytes]], cuenta_haber: str | None = None, periodo: str = '',
                  usar_ia: bool = True, excluir_bancos: bool = True, alerta_monto: float | None = None, umbral_ia: int = 90,
-                 constancias: list[tuple[str, bytes]] | None = None, usd_en_soles: bool = True, umbral_activo: float = 1800,
+                 constancias: list[tuple[str, bytes]] | None = None, usd_en_soles: bool = False, umbral_activo: float = 1800,
                  excluir_detraccion_sin_constancia: bool = True, glosa_ascii: bool = True, cuenta_percepcion: str = '40113') -> Lote:
         e = self.db.empresa(ruc) or {'nombre': ruc, 'cuenta_haber': '4212', 'alerta_monto': 20000}
         cuenta_haber = (cuenta_haber or e['cuenta_haber'] or '4212').strip()

@@ -106,7 +106,9 @@ def test_periodo_constancias_activo_y_usd(tmp_path):
     assert lote.n_constancias == 1 and [c.numero for c in lote.constancias_sin_factura] == ['999']
     fila = fila_newcontasis(serv, '4212')
     assert fila[20] == '312739411' and fila[22] == 3.52 and fila[27] == 'D'
-    assert fila[9] == 3520.0 and fila[18] == round(1180 * 3.52, 2) and fila[28] == 1180.0   # USD → soles en J..S, USD en AC
+    assert fila[9] == 1000.0 and fila[18] == 1180.0 and fila[28] == 1180.0   # USD: J..S en dólares, W = TC, AB = D, AC = USD
+    soles = fila_newcontasis(serv, '4212', usd_en_soles=True)                  # opción heredada: convertidos a soles
+    assert soles[9] == 3520.0 and soles[18] == round(1180 * 3.52, 2)
     lap = por_ruc['20100000002']
     assert lap.posible_activo and any('ACTIVO FIJO' in a for a in lap.alertas)
     assert fila_newcontasis(lap, '4212')[22] == 3.52                                          # TC también para soles

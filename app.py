@@ -43,17 +43,42 @@ def api_key() -> str | None:
         return os.environ.get('ANTHROPIC_API_KEY')
 
 
-@st.cache_resource
-def servicio() -> Servicio:
-    ruta = None
+def secreto(nombre: str) -> str:
     try:
-        ruta = st.secrets.get('PROPUESTA_DB')
+        v = st.secrets.get(nombre)
     except Exception:
-        pass
-    return Servicio(ruta_db=ruta or os.environ.get('PROPUESTA_DB'), api_key=api_key())
+        v = None
+    return (v or os.environ.get(nombre) or '').strip()
 
 
-S = servicio()
+@st.cache_resource
+def servicio(url_db: str, version: str) -> Servicio:
+    # url_db y version en la clave del caché: si cambia DATABASE_URL o se actualiza el código sin reiniciar,
+    # se crea un servicio nuevo en vez de reutilizar el de la versión anterior.
+    return Servicio(ruta_db=secreto('PROPUESTA_DB') or None, api_key=api_key(), url_db=url_db)
+
+
+try:
+    S = servicio(secreto('DATABASE_URL'), __version__)
+except Exception as ex:
+    st.error('No se pudo conectar con la base de datos (DATABASE_URL en los Secrets de Streamlit). Revise que la cadena esté '
+             'completa, entre comillas y empiece con postgresql://. Si acaba de crearla, espere unos segundos y recargue.')
+    st.caption(str(ex)[:300])
+    st.stop()
+if S.db.copiados:
+    st.toast('Primera vez con Postgres: se copiaron los datos guardados antes (' +
+             ', '.join(f'{t} {n}' for t, n in S.db.copiados.items()) + ').')
+    S.db.copiados = {}
+st.sidebar.caption(f'Almacén: {S.db.descripcion}')
+if not S.db.es_postgres and S.db.empresas():
+    st.sidebar.download_button('💾 Respaldo de los datos (.db)', S.db.respaldo_sqlite(), 'respaldo_propuesta.db',
+                               help='Empresas, planes, tipo de cambio, memoria y reglas. Descárguelo antes de pasar a Postgres (Neon).')
+elif S.db.es_postgres and not S.db.empresas():
+    _resp = st.sidebar.file_uploader('Restaurar respaldo (.db)', type=['db'], help='El archivo descargado con "Respaldo de los datos".')
+    if _resp is not None:
+        _cop = S.db.restaurar_respaldo(_resp.getvalue())
+        st.sidebar.success('Restaurado: ' + (', '.join(f'{t} {n}' for t, n in _cop.items()) or 'el respaldo estaba vacío'))
+        st.rerun()
 ss = st.session_state
 ss.setdefault('lote', None)
 ss.setdefault('ruc', None)
@@ -194,7 +219,11 @@ with st.sidebar:
             st.error(e)
         if total and not errores:
             st.rerun()
-    st.caption('El historial se acumula (nunca se borra). Ojo: en Streamlit Cloud gratuito los datos se pierden si la app se reinicia; para eso está prevista la base en la nube de la v0.2.')
+    if S.db.es_postgres:
+        st.caption('El historial se acumula y queda guardado en Postgres: reinicios y actualizaciones no lo borran.')
+    else:
+        st.caption('Ojo: almacén local (SQLite). En Streamlit Cloud se borra si la app se reinicia; configure DATABASE_URL '
+                   '(Postgres, por ejemplo Neon) en los Secrets para conservarlo.')
 
     st.markdown('---')
     st.caption(f'v{__version__} · IA: {"Claude activo" if api_key() else "sin API key (solo reglas)"}')
@@ -452,3 +481,5 @@ d4.download_button('🗜 Todo en ZIP', lote.zip_todo(), f'PROPUESTA_{tag}.zip', 
 
 with st.expander('Ver reporte de observaciones'):
     st.code(lote.reporte_txt(), language=None)
+
+st.caption(f'Almacén: {S.db.descripcion}')

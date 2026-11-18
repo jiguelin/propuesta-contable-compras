@@ -2,9 +2,11 @@
 """
 motor/memoria.py — Persistencia: empresas, planes de cuentas, tipo de cambio, aprendizaje.
 
-v1: SQLite (archivo local `datos/propuesta.db`). Todas las consultas pasan por esta clase, de modo
-que migrar a Postgres (Supabase/Neon) para 100+ empresas es cambiar solo este módulo.
-Variable de entorno PROPUESTA_DB → ruta del archivo SQLite.
+Dos almacenes, con las mismas consultas (todas pasan por esta clase):
+  · Postgres (Neon) si hay DATABASE_URL (secrets de Streamlit o variable de entorno). Sobrevive a reinicios y
+    actualizaciones de Streamlit Cloud. La primera vez que la base está vacía, copia lo que haya en el SQLite local.
+  · SQLite local (`datos/propuesta.db`, o PROPUESTA_DB): sirve en local; en Streamlit Cloud se borra al reiniciar.
+El SQL usa la sintaxis común a los dos (ON CONFLICT … DO UPDATE / DO NOTHING, RETURNING).
 """
 from __future__ import annotations
 
@@ -45,24 +47,87 @@ CREATE TABLE IF NOT EXISTS lotes (
 """
 
 
+TABLAS = ('empresas', 'plan_cuentas', 'tipo_cambio', 'aprendizaje', 'aprendizaje_mes', 'historial_stats', 'reglas', 'lotes')
+
+
 class Memoria:
-    def __init__(self, ruta: str | os.PathLike | None = None):
+    def __init__(self, ruta: str | os.PathLike | None = None, url: str | None = None):
         ruta = ruta or os.environ.get('PROPUESTA_DB') or Path(__file__).resolve().parent.parent / 'datos' / 'propuesta.db'
-        Path(ruta).parent.mkdir(parents=True, exist_ok=True)
         self.ruta = str(ruta)
-        self.cx = sqlite3.connect(self.ruta, check_same_thread=False)
-        self.cx.row_factory = sqlite3.Row
+        self.url = (url if url is not None else os.environ.get('DATABASE_URL', '')).strip()
+        self._cache: dict = {}
+        if self.url:
+            from .bd import ConexionPG
+            self.cx = ConexionPG(self.url)
+            self.es_postgres = True
+        else:
+            Path(ruta).parent.mkdir(parents=True, exist_ok=True)
+            self.cx = sqlite3.connect(self.ruta, check_same_thread=False)
+            self.cx.row_factory = sqlite3.Row
+            self.es_postgres = False
         self.cx.executescript(SCHEMA)
+        self.copiados: dict = {}
+        if self.es_postgres:
+            self.copiados = self._copiar_desde_sqlite()
         self._migrar_aprendizaje_mes()
+
+    def restaurar_respaldo(self, data: bytes) -> dict:
+        """Copia a Postgres un respaldo .db (el SQLite descargado del app). Solo si la base está vacía."""
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as f:
+            f.write(data)
+        try:
+            out = self._copiar_desde_sqlite(f.name)
+        finally:
+            os.unlink(f.name)
+        self._cache.clear()
+        return out
+
+    def respaldo_sqlite(self) -> bytes:
+        """El archivo SQLite completo (para descargarlo antes de pasar a Postgres)."""
+        self.cx.commit()
+        return Path(self.ruta).read_bytes() if Path(self.ruta).is_file() else b''
+
+    @property
+    def descripcion(self) -> str:
+        return f'Postgres ({self.cx.host})' if self.es_postgres else f'SQLite local ({Path(self.ruta).name})'
+
+    def _copiar_desde_sqlite(self, ruta: str | os.PathLike | None = None) -> dict:
+        """Primera vez con Postgres: si la base está vacía y existe el SQLite local con datos (empresas, planes,
+        tipo de cambio, memoria, reglas, lotes), los copia. Así cambiar a Neon no obliga a cargar todo de nuevo."""
+        ruta = str(ruta or self.ruta)
+        if self.cx.execute('SELECT COUNT(*) FROM empresas').fetchone()[0] or not Path(ruta).is_file():
+            return {}
+        src = sqlite3.connect(ruta)
+        src.row_factory = sqlite3.Row
+        copiados = {}
+        try:
+            existentes = {r[0] for r in src.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            for t in TABLAS:
+                if t not in existentes:
+                    continue
+                filas = [dict(r) for r in src.execute(f'SELECT * FROM {t}')]
+                if not filas:
+                    continue
+                cols = list(filas[0])
+                self.cx.executemany(f'INSERT INTO {t}({",".join(cols)}) VALUES({",".join("?" * len(cols))}) ON CONFLICT DO NOTHING',
+                                    [[f[c] for c in cols] for f in filas])
+                copiados[t] = len(filas)
+            for t in ('reglas', 'lotes'):            # los id copiados no deben chocar con los nuevos
+                self.cx.execute(f"SELECT setval(pg_get_serial_sequence('{t}','id'), COALESCE((SELECT MAX(id) FROM {t}), 0) + 1, false)")
+            self.cx.commit()
+        finally:
+            src.close()
+        return copiados
 
     def _migrar_aprendizaje_mes(self):
         """v0.3.5: la memoria pasa a guardarse por mes (para que lo reciente pese más). Lo aprendido antes se lleva
         al mes de su último uso."""
         if self.cx.execute('SELECT COUNT(*) FROM aprendizaje_mes').fetchone()[0]:
             return
-        self.cx.execute("""INSERT OR IGNORE INTO aprendizaje_mes(ruc,ruc_proveedor,concepto,cuenta,mes,origen,veces)
+        self.cx.execute("""INSERT INTO aprendizaje_mes(ruc,ruc_proveedor,concepto,cuenta,mes,origen,veces)
                            SELECT ruc,ruc_proveedor,concepto,cuenta,substr(COALESCE(ultima,''),1,7),COALESCE(origen,''),veces
-                           FROM aprendizaje""")
+                           FROM aprendizaje WHERE true ON CONFLICT DO NOTHING""")
         self.cx.commit()
 
     # ---------------- empresas ----------------
@@ -85,21 +150,29 @@ class Memoria:
         for t in ('plan_cuentas', 'aprendizaje', 'aprendizaje_mes', 'historial_stats', 'lotes', 'empresas'):
             self.cx.execute(f'DELETE FROM {t} WHERE ruc=?', (ruc,))
         self.cx.commit()
+        self._cache.pop(('plan', ruc), None)
 
     # ---------------- plan de cuentas ----------------
     def guardar_plan(self, ruc: str, plan: PlanCuentas):
         self.cx.execute('DELETE FROM plan_cuentas WHERE ruc=?', (ruc,))
-        self.cx.executemany('INSERT OR REPLACE INTO plan_cuentas VALUES(?,?,?,?,?,?)',
+        self.cx.executemany('''INSERT INTO plan_cuentas(ruc,codigo,descripcion,a_debe,a_haber,tipo) VALUES(?,?,?,?,?,?)
+                               ON CONFLICT(ruc,codigo) DO UPDATE SET descripcion=excluded.descripcion, a_debe=excluded.a_debe,
+                               a_haber=excluded.a_haber, tipo=excluded.tipo''',
                             [(ruc, c.codigo, c.descripcion, c.a_debe, c.a_haber, c.tipo) for c in plan.cuentas])
         self.cx.execute('UPDATE empresas SET actualizado=? WHERE ruc=?', (datetime.now().isoformat(timespec='seconds'), ruc))
         self.cx.commit()
+        self._cache.pop(('plan', ruc), None)
 
     def plan(self, ruc: str) -> PlanCuentas | None:
+        # en memoria: el app lo pide en cada clic y con la base en internet serían miles de filas por clic
+        if ('plan', ruc) in self._cache:
+            return self._cache[('plan', ruc)]
         regs = [dict(r) for r in self.cx.execute('SELECT codigo,descripcion,a_debe,a_haber,tipo FROM plan_cuentas WHERE ruc=? ORDER BY codigo', (ruc,))]
         if not regs:
             return None
         e = self.empresa(ruc) or {}
-        return PlanCuentas.desde_registros(regs, empresa=e.get('nombre', ''), ruc=ruc)
+        self._cache[('plan', ruc)] = PlanCuentas.desde_registros(regs, empresa=e.get('nombre', ''), ruc=ruc)
+        return self._cache[('plan', ruc)]
 
     def plan_resumen(self, ruc: str) -> int:
         return self.cx.execute('SELECT COUNT(*) FROM plan_cuentas WHERE ruc=?', (ruc,)).fetchone()[0]
@@ -111,11 +184,14 @@ class Memoria:
                                ON CONFLICT(fecha) DO UPDATE SET compra=excluded.compra, venta=excluded.venta, fuente=excluded.fuente, cargado=excluded.cargado""",
                             [(t.fecha.isoformat(), t.compra, t.venta, t.fuente, now) for t in items])
         self.cx.commit()
+        self._cache.pop('tc', None)
         return len(items)
 
     def tc(self) -> HistorialTC:
-        return HistorialTC([TC(date.fromisoformat(r['fecha']), r['compra'], r['venta'], r['fuente'])
-                            for r in self.cx.execute('SELECT * FROM tipo_cambio')])
+        if 'tc' not in self._cache:
+            self._cache['tc'] = [TC(date.fromisoformat(r['fecha']), r['compra'], r['venta'], r['fuente'])
+                                 for r in self.cx.execute('SELECT * FROM tipo_cambio')]
+        return HistorialTC(list(self._cache['tc']))
 
     # ---------------- aprendizaje (memoria proveedor + concepto) ----------------
     # Cada uso se guarda con su MES. Al consultar, lo reciente pesa más: el mes más reciente de la empresa vale 1,
@@ -130,10 +206,10 @@ class Memoria:
         now = datetime.now().isoformat(timespec='seconds')
         mes = (mes if mes is not None else now[:7])[:7]
         self.cx.execute("""INSERT INTO aprendizaje(ruc,ruc_proveedor,concepto,cuenta,veces,origen,ultima) VALUES(?,?,?,?,?,?,?)
-                           ON CONFLICT(ruc,ruc_proveedor,concepto,cuenta) DO UPDATE SET veces=veces+excluded.veces, ultima=excluded.ultima, origen=excluded.origen""",
+                           ON CONFLICT(ruc,ruc_proveedor,concepto,cuenta) DO UPDATE SET veces=aprendizaje.veces+excluded.veces, ultima=excluded.ultima, origen=excluded.origen""",
                         (ruc, ruc_proveedor, concepto, cuenta, int(round(veces)) or 1, origen, now))
         self.cx.execute("""INSERT INTO aprendizaje_mes(ruc,ruc_proveedor,concepto,cuenta,mes,origen,veces) VALUES(?,?,?,?,?,?,?)
-                           ON CONFLICT(ruc,ruc_proveedor,concepto,cuenta,mes,origen) DO UPDATE SET veces=veces+excluded.veces""",
+                           ON CONFLICT(ruc,ruc_proveedor,concepto,cuenta,mes,origen) DO UPDATE SET veces=aprendizaje_mes.veces+excluded.veces""",
                         (ruc, ruc_proveedor, concepto, cuenta, mes, origen, veces))
         self.cx.commit()
 
@@ -143,7 +219,7 @@ class Memoria:
         for mes in meses:
             self.cx.execute("DELETE FROM aprendizaje_mes WHERE ruc=? AND origen='historial' AND mes=?", (ruc, mes))
         self.cx.executemany("""INSERT INTO aprendizaje_mes(ruc,ruc_proveedor,concepto,cuenta,mes,origen,veces) VALUES(?,?,?,?,?,'historial',?)
-                               ON CONFLICT(ruc,ruc_proveedor,concepto,cuenta,mes,origen) DO UPDATE SET veces=veces+excluded.veces""",
+                               ON CONFLICT(ruc,ruc_proveedor,concepto,cuenta,mes,origen) DO UPDATE SET veces=aprendizaje_mes.veces+excluded.veces""",
                             [(ruc, rp, co, cu, me, n) for rp, co, cu, me, n in filas])
         now = datetime.now().isoformat(timespec='seconds')
         self.cx.executemany("""INSERT INTO aprendizaje(ruc,ruc_proveedor,concepto,cuenta,veces,origen,ultima) VALUES(?,?,?,?,?,'historial',?)
@@ -208,10 +284,12 @@ class Memoria:
         for cuenta, n in frecuencia.items():
             if acumular:
                 self.cx.execute("""INSERT INTO historial_stats(ruc,cuenta,veces,descripcion) VALUES(?,?,?,?)
-                                   ON CONFLICT(ruc,cuenta) DO UPDATE SET veces=veces+excluded.veces""",
+                                   ON CONFLICT(ruc,cuenta) DO UPDATE SET veces=historial_stats.veces+excluded.veces""",
                                 (ruc, cuenta, n, descripciones.get(cuenta, '')))
             else:
-                self.cx.execute('INSERT OR REPLACE INTO historial_stats VALUES(?,?,?,?)', (ruc, cuenta, n, descripciones.get(cuenta, '')))
+                self.cx.execute('''INSERT INTO historial_stats(ruc,cuenta,veces,descripcion) VALUES(?,?,?,?)
+                                   ON CONFLICT(ruc,cuenta) DO UPDATE SET veces=excluded.veces, descripcion=excluded.descripcion''',
+                                (ruc, cuenta, n, descripciones.get(cuenta, '')))
         self.cx.commit()
 
     def historial_stats(self, ruc: str) -> dict[str, int]:
@@ -235,11 +313,12 @@ class Memoria:
             self.cx.commit()
             return r.id
         cur = self.cx.execute('''INSERT INTO reglas(ruc,tipo,nombre,palabras,ruc_proveedor,cuenta,alternativas,nota,prioridad,activa,creado)
-                                 VALUES(?,?,?,?,?,?,?,?,?,?,?)''',
+                                 VALUES(?,?,?,?,?,?,?,?,?,?,?) RETURNING id''',
                               (r.ruc, r.tipo, r.nombre, r.palabras, r.ruc_proveedor, r.cuenta,
                                r.alternativas, r.nota, r.prioridad, r.activa, datetime.now().isoformat(timespec='seconds')))
+        nuevo = cur.fetchone()[0]
         self.cx.commit()
-        return cur.lastrowid
+        return nuevo
 
     def eliminar_regla(self, id_regla: int):
         self.cx.execute('DELETE FROM reglas WHERE id=?', (id_regla,))

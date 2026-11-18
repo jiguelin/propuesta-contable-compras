@@ -161,6 +161,21 @@ Sin API key la app funciona igual (solo reglas + plan + memoria).
   no lo duplica. Correcciones y confirmaciones cuentan en el mes del lote. Lo aprendido antes se migra al mes de su último
   uso. Las reglas contables siguen mandando sobre la memoria.
 
+## Novedades v0.3.6 — datos en Postgres (Neon)
+
+En Streamlit Cloud el archivo SQLite se borra en cada reinicio o actualización. Con **DATABASE_URL** en los Secrets,
+todo (empresas, planes de cuentas, tipo de cambio, memoria proveedor → cuenta, reglas y lotes) queda en Postgres.
+
+1. neon.com → crear proyecto (región AWS US East) → **Connect** → copiar la cadena `postgresql://…neon.tech/neondb?sslmode=require`.
+2. Streamlit Cloud → app → ⋮ → **Settings → Secrets** → agregar `DATABASE_URL = "…"` (sin borrar lo demás) → Save.
+3. La barra lateral debe decir **"Almacén: Postgres (….neon.tech)"**.
+
+- La primera vez, si la base de Neon está vacía, se copian solos los datos que había en el SQLite del app.
+- Una sola conexión reutilizada que se reconecta sola cuando Neon apaga la base por inactividad (el primer clic
+  después de un rato tarda un segundo más). Plan de cuentas y tipo de cambio se guardan en memoria del app.
+- La cadena va solo en los Secrets: el repositorio es público.
+- Pruebas contra un Postgres de pruebas: `TEST_DATABASE_URL=postgresql://… python -m pytest -q`.
+
 ## Hoja de ruta
 
 - **v0.1 (esta)**: flujo completo XML → Excel + reporte, memoria por proveedor+concepto, TC, detracción, IA opcional.

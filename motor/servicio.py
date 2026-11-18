@@ -196,8 +196,8 @@ def _notas_del_excel(props: list[Propuesta], plan: PlanCuentas | None, glosa_asc
 
 
 class Servicio:
-    def __init__(self, ruta_db: str | None = None, api_key: str | None = None):
-        self.db = Memoria(ruta_db)
+    def __init__(self, ruta_db: str | None = None, api_key: str | None = None, url_db: str | None = None):
+        self.db = Memoria(ruta_db, url=url_db)
         self.api_key = api_key
 
     # ---------- empresas ----------
